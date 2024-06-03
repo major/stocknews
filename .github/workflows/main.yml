@@ -58,7 +58,9 @@ jobs:
         run: tox
 
   container:
-    needs: tox
+    needs:
+      - quality
+      - tox
     permissions:
       contents: read
       packages: write
