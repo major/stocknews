@@ -1,10 +1,8 @@
 #!/usr/bin/env python
+"""Run the news bot."""
 
 import logging
 from time import sleep
-
-# Setup our shared logger.
-log = logging.getLogger(__name__)
 
 from schedule import every, repeat, run_pending
 
@@ -12,6 +10,9 @@ from stocknews.config import DISCORD_EARNINGS_WEBHOOK, DISCORD_NEWS_WEBHOOK
 from stocknews.news import get_all_news
 from stocknews.notify import send_to_discord
 from stocknews.utils import article_in_cache, is_blocked_ticker, is_earnings_news
+
+# Setup our shared logger.
+log = logging.getLogger(__name__)
 
 
 @repeat(every().minute)
