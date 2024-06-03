@@ -78,7 +78,7 @@ jobs:
         id: build
         uses: redhat-actions/buildah-build@main
         with:
-          image: ${{ env.IMAGE_NAME }}
+          image: ${{ env.IMAGE_REGISTRY }}/${{ env.REGISTRY_USER }}/${{ env.IMAGE_NAME }}
           tags: ${{ env.IMAGE_TAGS }}
           extra-args: "--squash"
           containerfiles: "Dockerfile"
