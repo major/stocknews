@@ -3,6 +3,7 @@
 import logging
 import re
 from hashlib import sha256
+from typing import Optional
 
 from redis import Redis
 
@@ -28,6 +29,14 @@ def article_in_cache(symbols: list, headline: str) -> bool:
         REDIS_CONN.set(article_key, article_string, ex=3600)
 
     return False
+
+
+def get_cache_expiration(symbols: list, headline: str) -> Optional[int]:
+    """Get the expiration time for the cache."""
+    if is_earnings_news(symbols, headline):
+        return None
+
+    return 3600
 
 
 def is_earnings_news(symbols: list, headline: str) -> bool:

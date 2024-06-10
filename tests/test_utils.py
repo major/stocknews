@@ -11,6 +11,17 @@ def test_article_in_cache():
     assert utils.article_in_cache(["AAPL"], "Apple stock is up 10%")
 
 
+def test_get_cache_expiration():
+    assert utils.get_cache_expiration(["AAPL"], "Apple stock is up 10%") == 3600
+    assert (
+        utils.get_cache_expiration(
+            ["AAPL"],
+            "CVD Equipment Q1 EPS $(0.22) Down From $(0.01) YoY, Sales $4.92M Down From $8.70M YoY",
+        )
+        is None
+    )
+
+
 def test_is_earnings_news_symbols():
     assert not utils.is_earnings_news(["ONE", "TWO"], "Headline")
     assert not utils.is_earnings_news([], "Headline")
