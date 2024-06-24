@@ -51,7 +51,9 @@ def fetch_news() -> None:
             send_earnings_to_discord(news_item["symbols"], news_item["headline"])
         else:
             log.info(f"💤 Regular news: {news_item['headline']}")
-            send_news_to_discord(news_item["symbols"], news_item["headline"])
+            send_news_to_discord(
+                news_item["symbols"], news_item["headline"], news_item["url"]
+            )
 
 
 if __name__ == "__main__":

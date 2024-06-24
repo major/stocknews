@@ -23,7 +23,7 @@ def get_username(symbols: list) -> str:
     return "🗞️"
 
 
-def send_news_to_discord(symbols: list, headline: str) -> None:
+def send_news_to_discord(symbols: list, headline: str, url: str) -> None:
     """Send a news item to a Discord webhook."""
     symbol = symbols[0]
 
@@ -35,7 +35,7 @@ def send_news_to_discord(symbols: list, headline: str) -> None:
 
     embed = DiscordEmbed(
         title=symbol,
-        description=headline,
+        description=f"{headline} [Read more]({url})",
     )
     embed.set_image(url=TRANSPARENT_PNG)
     embed.set_thumbnail(url=STOCK_LOGO % symbol)
