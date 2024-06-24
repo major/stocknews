@@ -7,7 +7,7 @@ from typing import Optional
 
 from redis import Redis
 
-from stocknews.config import BLOCKED_TICKERS, REDIS_HOST, REDIS_PORT
+from stocknews.config import BLOCKED_PHRASES, BLOCKED_TICKERS, REDIS_HOST, REDIS_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -114,3 +114,8 @@ def get_earnings_notification_description(headline: str) -> str:
         )
 
     return "\n".join(description)
+
+
+def has_blocked_phrases(headline: str) -> bool:
+    """Check if the headline contains blocked phrases."""
+    return any(x in headline.lower() for x in BLOCKED_PHRASES)

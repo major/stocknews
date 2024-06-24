@@ -157,3 +157,14 @@ def test_description_partial_data():
         utils.get_earnings_notification_description(headline)
         == "✅ Sales: $26.044B vs. $24.646B est."
     )
+
+
+def test_has_blocked_phrases():
+    """Verify we can reject news based on blocked phrases."""
+    headline = (
+        "If You Invested $1000 In This Stock 15 Years Ago, You Would Have $9,600 Today"
+    )
+    assert utils.has_blocked_phrases(headline) is True
+
+    headline = "Manulife Financial Increases Its Core ROE Target To 18% Plus By 2027"
+    assert utils.has_blocked_phrases(headline) is False

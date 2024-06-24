@@ -44,3 +44,6 @@ STOCK_LOGO = "https://s3.amazonaws.com/logos.atom.finance/stocks-and-funds/%s.pn
 
 # Transparent long PNG to make all embeds the same length
 TRANSPARENT_PNG = "https://major.io/transparent.png"
+
+# Blocked phrases in news stories that we don't want.
+BLOCKED_PHRASES = ["if you invested", "you would have", "would be worth"]

@@ -6,10 +6,14 @@ from time import sleep
 
 from schedule import every, repeat, run_pending
 
-from stocknews.config import DISCORD_NEWS_WEBHOOK
 from stocknews.news import get_all_news
-from stocknews.notify import send_earnings_to_discord, send_to_discord
-from stocknews.utils import article_in_cache, is_blocked_ticker, is_earnings_news
+from stocknews.notify import send_earnings_to_discord, send_news_to_discord
+from stocknews.utils import (
+    article_in_cache,
+    has_blocked_phrases,
+    is_blocked_ticker,
+    is_earnings_news,
+)
 
 # Setup our shared logger.
 log = logging.getLogger(__name__)
@@ -26,7 +30,13 @@ def fetch_news() -> None:
             )
             continue
 
-        if len(news_item["symbols"]) > 2:
+        if has_blocked_phrases(news_item["headline"]):
+            log.info(
+                f"🚫 Blocked phrases: {news_item["symbols"]} {news_item['headline']}"
+            )
+            continue
+
+        if len(news_item["symbols"]) > 1:
             log.info(
                 f"🐘 Too many symbols: {news_item["symbols"]} {news_item['headline']}"
             )
@@ -41,9 +51,7 @@ def fetch_news() -> None:
             send_earnings_to_discord(news_item["symbols"], news_item["headline"])
         else:
             log.info(f"💤 Regular news: {news_item['headline']}")
-            send_to_discord(
-                news_item["symbols"], news_item["headline"], DISCORD_NEWS_WEBHOOK
-            )
+            send_news_to_discord(news_item["symbols"], news_item["headline"])
 
 
 if __name__ == "__main__":
