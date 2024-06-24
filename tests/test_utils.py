@@ -1,6 +1,7 @@
 """Test the utilities."""
 
 import fakeredis
+import pytest
 
 from stocknews import utils
 
@@ -53,3 +54,106 @@ def test_is_blocked_ticker():
     assert not utils.is_blocked_ticker(["TSLA"])
     assert utils.is_blocked_ticker(["AAPL", "TSLA"])
     assert not utils.is_blocked_ticker(["TSLA", "MSFT"])
+
+
+def test_extract_earnings_data():
+    """Verify that we can parse EPS results."""
+    headline = "Nutanix Q3 2024 Adj EPS $0.28 Beats $0.17 Estimate, Sales $524.577M Beat $516.183M Estimate"
+    data = utils.extract_earnings_data(headline)
+
+    expected = {
+        "EPS": {
+            "actual": "$0.28",
+            "estimate": "$0.17",
+            "beat": True,
+        },
+        "Sales": {
+            "actual": "$524.577M",
+            "estimate": "$516.183M",
+            "beat": True,
+        },
+    }
+
+    assert data == expected
+
+
+def test_extract_earnings_data_no_data():
+    """Verify that we can parse EPS results when some data is missing."""
+    headline = "NVIDIA Q1 2025 Adj EPS $6.12 Beats $5.59 Estimate"
+    data = utils.extract_earnings_data(headline)
+
+    expected = {
+        "EPS": {
+            "actual": "$6.12",
+            "estimate": "$5.59",
+            "beat": True,
+        },
+    }
+
+    assert data == expected
+
+
+def test_extract_earnings_data_failure():
+    """Verify a failure to parse earnings data."""
+    headline = "Texas Community Bancshares Q1 2024 EPS $(0.89) Down From $(0.33) YoY"
+    assert utils.extract_earnings_data(headline) == {}
+
+
+@pytest.mark.parametrize(
+    "headline,expected",
+    [
+        ("Beats", True),
+        ("Beat", True),
+        ("Misses", False),
+        ("Miss", False),
+        ("Missed", False),
+    ],
+)
+def test_parse_earnings_result(headline, expected):
+    """Verify that we can parse a beat or miss."""
+    assert utils.parse_earnings_result(headline) == expected
+
+
+def test_get_company_name():
+    """Verify that we can extract the company name from a headline."""
+    headline = "Nutanix Q3 2024 Adj EPS $0.28 Beats $0.17 Estimate, Sales $524.577M Beat $516.183M Estimate"
+    assert utils.get_company_name(headline) == "Nutanix"
+
+    headline = "NVIDIA Q1 2025 Adj EPS $6.12 Beats $5.59 Estimate"
+    assert utils.get_company_name(headline) == "NVIDIA"
+
+    headline = "Texas Community Bancshares Q1 2024 EPS $(0.89) Down From $(0.33) YoY"
+    assert utils.get_company_name(headline) == "Texas Community Bancshares"
+
+
+def test_description_beat():
+    """Verify that we can generate a description for a beat."""
+    headline = "Nutanix Q3 2024 Adj EPS $0.28 Beats $0.17 Estimate, Sales $524.577M Beat $516.183M Estimate"
+    assert (
+        utils.get_earnings_notification_description(headline)
+        == "✅ EPS: $0.28 vs. $0.17 est.\n✅ Sales: $524.577M vs. $516.183M est."
+    )
+
+
+def test_description_miss():
+    """Verify that we can generate a description for a miss."""
+    headline = "Liquidia Q1 2024 GAAP EPS $(0.54) Misses $(0.30) Estimate, Sales $2.972M Miss $4.388M Estimate"
+    assert (
+        utils.get_earnings_notification_description(headline)
+        == "❌ EPS: $(0.54) vs. $(0.30) est.\n❌ Sales: $2.972M vs. $4.388M est."
+    )
+
+
+def test_description_partial_data():
+    """Verify description generation if we're missing sales or EPS."""
+    headline = "NVIDIA Q1 2025 Adj EPS $6.12 Beats $5.59 Estimate"
+    assert (
+        utils.get_earnings_notification_description(headline)
+        == "✅ EPS: $6.12 vs. $5.59 est."
+    )
+
+    headline = "NVIDIA Q1 Sales $26.044B Beat $24.646B Estimate"
+    assert (
+        utils.get_earnings_notification_description(headline)
+        == "✅ Sales: $26.044B vs. $24.646B est."
+    )

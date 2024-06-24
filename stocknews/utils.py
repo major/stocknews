@@ -9,7 +9,7 @@ from redis import Redis
 
 from stocknews.config import BLOCKED_TICKERS, REDIS_HOST, REDIS_PORT
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 REDIS_CONN = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
@@ -20,11 +20,11 @@ def article_in_cache(symbols: list, headline: str) -> bool:
     article_key = sha256(article_string.encode()).hexdigest()
 
     if REDIS_CONN.exists(article_key):
-        logging.info(f"Article '{article_string}' already in cache.")
+        logger.info(f"Article '{article_string}' already in cache.")
         return True
 
     else:
-        logging.info(f"Article '{article_string}' not in cache -- adding it.")
+        logger.info(f"Article '{article_string}' not in cache -- adding it.")
         # Expire the cache record after a while to avoid consuming too much memory.
         REDIS_CONN.set(article_key, article_string, ex=3600)
 
@@ -57,3 +57,60 @@ def is_blocked_ticker(symbols: list) -> bool:
         return True
 
     return False
+
+
+def extract_earnings_data(headline: str) -> dict:
+    """Extract earnings data from a headline."""
+    # Regex101: https://regex101.com/r/gzWfqo/1
+    regex = r"(EPS|Sales) ([\d\.()$KMBT]+) (\w*) ([\d\.()$KMBT]+) Est(?:imate|\.)"
+    matches = re.findall(regex, headline, re.IGNORECASE)
+
+    if not matches:
+        logger.info(f"No earnings data found in headline: {headline}")
+        return {}
+
+    earnings_data = {}
+
+    for match in matches:
+        result_type = "EPS" if match[0].lower() == "eps" else "Sales"
+        earnings_data[result_type] = {
+            "actual": match[1],
+            "estimate": match[3],
+            "beat": parse_earnings_result(headline),
+        }
+
+    return earnings_data
+
+
+def parse_earnings_result(raw_result: str) -> bool:
+    """Parse the earnings result from a headline."""
+    if "beat" in raw_result.lower():
+        return True
+
+    return False
+
+
+def get_company_name(headline: str) -> str:
+    """Extract the company name from a headline."""
+    regex = r"^(.*?) (?=Q[1-4])"
+    matches = re.findall(regex, headline)
+    return str(matches[0]) if matches else ""
+
+
+def boolean_to_emoji(value: bool) -> str:
+    """Convert a boolean value to an emoji."""
+    return "✅" if value else "❌"
+
+
+def get_earnings_notification_description(headline: str) -> str:
+    """Get the earnings notification description."""
+    result = extract_earnings_data(headline)
+    description = []
+
+    for key, value in result.items():
+        emoji = boolean_to_emoji(value["beat"])
+        description.append(
+            f"{emoji} {key}: {value['actual']} vs. {value['estimate']} est."
+        )
+
+    return "\n".join(description)
