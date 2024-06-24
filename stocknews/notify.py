@@ -4,7 +4,12 @@ import logging
 
 from discord_webhook import DiscordEmbed, DiscordWebhook
 
-from stocknews.config import DISCORD_EARNINGS_WEBHOOK, STOCK_LOGO, TRANSPARENT_PNG
+from stocknews.config import (
+    DISCORD_EARNINGS_WEBHOOK,
+    DISCORD_NEWS_WEBHOOK,
+    STOCK_LOGO,
+    TRANSPARENT_PNG,
+)
 from stocknews.utils import get_company_name, get_earnings_notification_description
 
 log = logging.getLogger(__name__)
@@ -18,14 +23,24 @@ def get_username(symbols: list) -> str:
     return "🗞️"
 
 
-def send_to_discord(symbols: list, headline: str, webhook_url: str) -> None:
+def send_news_to_discord(symbols: list, headline: str) -> None:
     """Send a news item to a Discord webhook."""
+    symbol = symbols[0]
+
     webhook = DiscordWebhook(
-        url=webhook_url,
-        content=headline,
+        url=DISCORD_NEWS_WEBHOOK,
         rate_limit_retry=True,
-        username=get_username(symbols),
+        username="News Bot",
     )
+
+    embed = DiscordEmbed(
+        title=symbol,
+        description=headline,
+    )
+    embed.set_image(url=TRANSPARENT_PNG)
+    embed.set_thumbnail(url=STOCK_LOGO % symbol)
+    webhook.add_embed(embed)
+
     webhook.execute()
 
 
