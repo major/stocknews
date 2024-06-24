@@ -1,6 +1,7 @@
 """Test the utilities."""
 
 import fakeredis
+import pytest
 
 from stocknews import utils
 
@@ -53,3 +54,45 @@ def test_is_blocked_ticker():
     assert not utils.is_blocked_ticker(["TSLA"])
     assert utils.is_blocked_ticker(["AAPL", "TSLA"])
     assert not utils.is_blocked_ticker(["TSLA", "MSFT"])
+
+
+def test_extract_earnings_data():
+    """Verify that we can parse EPS results."""
+    headline = "Nutanix Q3 2024 Adj EPS $0.28 Beats $0.17 Estimate, Sales $524.577M Beat $516.183M Estimate"
+    data = utils.extract_earnings_data(headline)
+
+    expected = {
+        "eps": {
+            "actual": "$0.28",
+            "estimate": "$0.17",
+            "beat": True,
+        },
+        "sales": {
+            "actual": "$524.577M",
+            "estimate": "$516.183M",
+            "beat": True,
+        },
+    }
+
+    assert data == expected
+
+
+def test_extract_earnings_data_failure():
+    """Verify a failure to parse earnings data."""
+    headline = "Texas Community Bancshares Q1 2024 EPS $(0.89) Down From $(0.33) YoY"
+    assert utils.extract_earnings_data(headline) == {}
+
+
+@pytest.mark.parametrize(
+    "headline,expected",
+    [
+        ("Beats", True),
+        ("Beat", True),
+        ("Misses", False),
+        ("Miss", False),
+        ("Missed", False),
+    ],
+)
+def test_parse_earnings_result(headline, expected):
+    """Verify that we can parse a beat or miss."""
+    assert utils.parse_earnings_result(headline) == expected
