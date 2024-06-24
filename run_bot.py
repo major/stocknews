@@ -6,9 +6,9 @@ from time import sleep
 
 from schedule import every, repeat, run_pending
 
-from stocknews.config import DISCORD_EARNINGS_WEBHOOK, DISCORD_NEWS_WEBHOOK
+from stocknews.config import DISCORD_NEWS_WEBHOOK
 from stocknews.news import get_all_news
-from stocknews.notify import send_to_discord
+from stocknews.notify import send_earnings_to_discord, send_to_discord
 from stocknews.utils import article_in_cache, is_blocked_ticker, is_earnings_news
 
 # Setup our shared logger.
@@ -38,9 +38,7 @@ def fetch_news() -> None:
 
         if is_earnings_news(news_item["symbols"], news_item["headline"]):
             log.info(f"💸 Earnings news: {news_item['headline']}")
-            send_to_discord(
-                news_item["symbols"], news_item["headline"], DISCORD_EARNINGS_WEBHOOK
-            )
+            send_earnings_to_discord(news_item["symbols"], news_item["headline"])
         else:
             log.info(f"💤 Regular news: {news_item['headline']}")
             send_to_discord(

@@ -38,3 +38,9 @@ REDIS_PORT: int = int(os.environ.get("REDIS_PORT", 6379))
 # Discord Channels
 DISCORD_EARNINGS_WEBHOOK = os.getenv("DISCORD_EARNINGS_WEBHOOK", "missing")
 DISCORD_NEWS_WEBHOOK = os.getenv("DISCORD_NEWS_WEBHOOK", "missing")
+
+# Stock logo URL.
+STOCK_LOGO = "https://s3.amazonaws.com/logos.atom.finance/stocks-and-funds/%s.png"
+
+# Transparent long PNG to make all embeds the same length
+TRANSPARENT_PNG = "https://major.io/transparent.png"
