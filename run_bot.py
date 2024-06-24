@@ -24,6 +24,12 @@ def fetch_news() -> None:
     news_items = get_all_news()
 
     for news_item in news_items:
+        if news_item["author"] != "Benzinga Newsdesk":
+            log.info(
+                f"🚫 Blocked author: {news_item["symbols"]} {news_item['headline']}"
+            )
+            continue
+
         if is_blocked_ticker(news_item["symbols"]):
             log.info(
                 f"🚫 Blocked symbols: {news_item["symbols"]} {news_item['headline']}"
