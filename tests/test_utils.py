@@ -77,6 +77,22 @@ def test_extract_earnings_data():
     assert data == expected
 
 
+def test_extract_earnings_data_no_data():
+    """Verify that we can parse EPS results when some data is missing."""
+    headline = "NVIDIA Q1 2025 Adj EPS $6.12 Beats $5.59 Estimate"
+    data = utils.extract_earnings_data(headline)
+
+    expected = {
+        "eps": {
+            "actual": "$6.12",
+            "estimate": "$5.59",
+            "beat": True,
+        },
+    }
+
+    assert data == expected
+
+
 def test_extract_earnings_data_failure():
     """Verify a failure to parse earnings data."""
     headline = "Texas Community Bancshares Q1 2024 EPS $(0.89) Down From $(0.33) YoY"
