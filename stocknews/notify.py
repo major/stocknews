@@ -48,15 +48,19 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
     """Send a news item to a Discord webhook."""
     symbol = symbols[0]
     company_name = get_company_name(headline)
+    description = get_earnings_notification_description(headline)
+
+    if not description:
+        log.warning("No earnings description found for %s", headline)
+        return
 
     webhook = DiscordWebhook(
         url=DISCORD_EARNINGS_WEBHOOK,
         rate_limit_retry=True,
     )
-
     embed = DiscordEmbed(
         title=f"{symbol}: {company_name}",
-        description=get_earnings_notification_description(headline),
+        description=description,
     )
     embed.set_image(url=TRANSPARENT_PNG)
     embed.set_thumbnail(url=STOCK_LOGO % symbol)
