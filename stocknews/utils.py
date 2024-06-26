@@ -99,7 +99,7 @@ def get_company_name(headline: str) -> str:
 
 def boolean_to_emoji(value: bool) -> str:
     """Convert a boolean value to an emoji."""
-    return "✅" if value else "❌"
+    return "💚" if value else "💔"
 
 
 def get_earnings_notification_description(headline: str) -> str:
