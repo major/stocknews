@@ -131,7 +131,7 @@ def test_description_beat():
     headline = "Nutanix Q3 2024 Adj EPS $0.28 Beats $0.17 Estimate, Sales $524.577M Beat $516.183M Estimate"
     assert (
         utils.get_earnings_notification_description(headline)
-        == "✅ EPS: $0.28 vs. $0.17 est.\n✅ Sales: $524.577M vs. $516.183M est."
+        == "💚 EPS: $0.28 vs. $0.17 est.\n💚 Sales: $524.577M vs. $516.183M est."
     )
 
 
@@ -140,7 +140,7 @@ def test_description_miss():
     headline = "Liquidia Q1 2024 GAAP EPS $(0.54) Misses $(0.30) Estimate, Sales $2.972M Miss $4.388M Estimate"
     assert (
         utils.get_earnings_notification_description(headline)
-        == "❌ EPS: $(0.54) vs. $(0.30) est.\n❌ Sales: $2.972M vs. $4.388M est."
+        == "💔 EPS: $(0.54) vs. $(0.30) est.\n💔 Sales: $2.972M vs. $4.388M est."
     )
 
 
@@ -149,13 +149,13 @@ def test_description_partial_data():
     headline = "NVIDIA Q1 2025 Adj EPS $6.12 Beats $5.59 Estimate"
     assert (
         utils.get_earnings_notification_description(headline)
-        == "✅ EPS: $6.12 vs. $5.59 est."
+        == "💚 EPS: $6.12 vs. $5.59 est."
     )
 
     headline = "NVIDIA Q1 Sales $26.044B Beat $24.646B Estimate"
     assert (
         utils.get_earnings_notification_description(headline)
-        == "✅ Sales: $26.044B vs. $24.646B est."
+        == "💚 Sales: $26.044B vs. $24.646B est."
     )
 
 
