@@ -76,7 +76,7 @@ def extract_earnings_data(headline: str) -> dict:
         earnings_data[result_type] = {
             "actual": match[1],
             "estimate": match[3],
-            "beat": parse_earnings_result(headline),
+            "beat": parse_earnings_result(match[2]),
         }
 
     return earnings_data

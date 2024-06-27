@@ -144,6 +144,16 @@ def test_description_miss():
     )
 
 
+def test_description_mixed():
+    """Verify that we can create a description for a mix of beats and misses."""
+    headline = "Walgreens Boots Alliance Q3 2024 Adj EPS $0.63 Misses $0.71 Estimate, Sales $36.351B Beat $36.003B Estimate"
+
+    assert (
+        utils.get_earnings_notification_description(headline)
+        == "💔 EPS: $0.63 vs. $0.71 est.\n💚 Sales: $36.351B vs. $36.003B est."
+    )
+
+
 def test_description_partial_data():
     """Verify description generation if we're missing sales or EPS."""
     headline = "NVIDIA Q1 2025 Adj EPS $6.12 Beats $5.59 Estimate"
