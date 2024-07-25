@@ -3,7 +3,10 @@
     "extends": ["config:recommended"],
     "lockFileMaintenance": {
         "enabled": true,
-        "automerge": true
+        "automerge": true,
+        "automergeType": "branch",
+        "automergeStrategy": "rebase",
+        "commitBodyTable": true
     },
     "packageRules": [
         {
