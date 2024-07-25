@@ -1,5 +1,5 @@
 # From https://fastapi.tiangolo.com/deployment/docker/#docker-image-with-poetry
-FROM python:3.12 as requirements-stage
+FROM python:3.12 AS requirements-stage
 WORKDIR /tmp
 RUN pip install -U pip && pip install poetry poetry-plugin-export
 COPY ./pyproject.toml ./poetry.lock* /tmp/
