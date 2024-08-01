@@ -39,6 +39,10 @@ REDIS_PORT: int = int(os.environ.get("REDIS_PORT", 6379))
 DISCORD_EARNINGS_WEBHOOK = os.getenv("DISCORD_EARNINGS_WEBHOOK", "missing")
 DISCORD_NEWS_WEBHOOK = os.getenv("DISCORD_NEWS_WEBHOOK", "missing")
 
+# Mastodon authentication
+MASTODON_SERVER_URL = os.getenv("MASTODON_SERVER_URL", "missing")
+MASTODON_SERVER_TOKEN = os.getenv("MASTODON_SERVER_TOKEN", "missing")
+
 # Stock logo URL.
 STOCK_LOGO = "https://s3.amazonaws.com/logos.atom.finance/stocks-and-funds/%s.png"
 

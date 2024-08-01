@@ -20,11 +20,11 @@ def article_in_cache(symbols: list, headline: str) -> bool:
     article_key = sha256(article_string.encode()).hexdigest()
 
     if REDIS_CONN.exists(article_key):
-        logger.info(f"Article '{article_string}' already in cache.")
+        logger.debug(f"Article '{article_string}' already in cache.")
         return True
 
     else:
-        logger.info(f"Article '{article_string}' not in cache -- adding it.")
+        logger.debug(f"Article '{article_string}' not in cache -- adding it.")
         # Expire the cache record after a while to avoid consuming too much memory.
         REDIS_CONN.set(article_key, article_string, ex=3600)
 

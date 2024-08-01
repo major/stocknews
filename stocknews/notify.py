@@ -2,11 +2,14 @@
 
 import logging
 
+import httpx
 from discord_webhook import DiscordEmbed, DiscordWebhook
 
 from stocknews.config import (
     DISCORD_EARNINGS_WEBHOOK,
     DISCORD_NEWS_WEBHOOK,
+    MASTODON_SERVER_TOKEN,
+    MASTODON_SERVER_URL,
     STOCK_LOGO,
     TRANSPARENT_PNG,
 )
@@ -44,8 +47,27 @@ def send_news_to_discord(symbols: list, headline: str, url: str) -> None:
     webhook.execute()
 
 
+def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
+    """Send an earnings report to a Mastodon account."""
+    symbol = symbols[0]
+    company_name = get_company_name(headline)
+    description = get_earnings_notification_description(headline)
+
+    if not description:
+        log.warning("No earnings description found for %s", headline)
+        return
+
+    httpx.post(
+        MASTODON_SERVER_URL,
+        headers={"Authorization": f"Bearer {MASTODON_SERVER_TOKEN}"},
+        params={
+            "status": f"{symbol}: {company_name}\n\n{description}\n\n#stocks #markets #finance #earnings #{symbol}"
+        },
+    )
+
+
 def send_earnings_to_discord(symbols: list, headline: str) -> None:
-    """Send a news item to a Discord webhook."""
+    """Send an earnings report to a Discord webhook."""
     symbol = symbols[0]
     company_name = get_company_name(headline)
     description = get_earnings_notification_description(headline)
