@@ -2,8 +2,8 @@
 
 import logging
 
-import httpx
 from discord_webhook import DiscordEmbed, DiscordWebhook
+from mastodon import Mastodon
 
 from stocknews.config import (
     DISCORD_EARNINGS_WEBHOOK,
@@ -57,12 +57,12 @@ def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
         log.warning("No earnings description found for %s", headline)
         return
 
-    httpx.post(
-        MASTODON_SERVER_URL,
-        headers={"Authorization": f"Bearer {MASTODON_SERVER_TOKEN}"},
-        params={
-            "status": f"{symbol}: {company_name}\n\n{description}\n\n#stocks #markets #finance #earnings #{symbol}"
-        },
+    mastodon = Mastodon(
+        access_token=MASTODON_SERVER_TOKEN, api_base_url=MASTODON_SERVER_URL
+    )
+
+    mastodon.status_post(
+        f"{symbol}: {company_name}\n\n{description}\n\n#stocks #markets #finance #earnings #{symbol}"
     )
 
 

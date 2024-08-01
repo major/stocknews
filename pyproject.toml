@@ -13,6 +13,7 @@ httpx = "^0.27.0"
 redis = {extras = ["hiredis"], version = "^5.0.8"}
 discord-webhook = "^1.3.1"
 schedule = "^1.2.2"
+mastodon-py = "^1.8.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.2"
@@ -40,6 +41,10 @@ check_untyped_defs = "True"
 warn_return_any = "True"
 warn_unused_ignores = "True"
 show_error_codes = "True"
+
+[[tool.mypy.overrides]]
+module = "mastodon"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
