@@ -10,7 +10,6 @@ from stocknews.news import get_all_news
 from stocknews.notify import (
     send_earnings_to_discord,
     send_earnings_to_mastodon,
-    send_news_to_discord,
 )
 from stocknews.utils import (
     article_in_cache,
@@ -60,11 +59,6 @@ def fetch_news() -> None:
             log.info(f"💸 Earnings news: {news_item['headline']}")
             send_earnings_to_discord(news_item["symbols"], news_item["headline"])
             send_earnings_to_mastodon(news_item["symbols"], news_item["headline"])
-        else:
-            log.info(f"💤 Regular news: {news_item['headline']}")
-            send_news_to_discord(
-                news_item["symbols"], news_item["headline"], news_item["url"]
-            )
 
 
 if __name__ == "__main__":

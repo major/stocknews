@@ -7,7 +7,6 @@ from mastodon import Mastodon
 
 from stocknews.config import (
     DISCORD_EARNINGS_WEBHOOK,
-    DISCORD_NEWS_WEBHOOK,
     MASTODON_SERVER_TOKEN,
     MASTODON_SERVER_URL,
     STOCK_LOGO,
@@ -24,27 +23,6 @@ def get_username(symbols: list) -> str:
         return f"{', '.join(symbols)}"
 
     return "🗞️"
-
-
-def send_news_to_discord(symbols: list, headline: str, url: str) -> None:
-    """Send a news item to a Discord webhook."""
-    symbol = symbols[0]
-
-    webhook = DiscordWebhook(
-        url=DISCORD_NEWS_WEBHOOK,
-        rate_limit_retry=True,
-        username="News Bot",
-    )
-
-    embed = DiscordEmbed(
-        title=symbol,
-        description=f"{headline} [Read more]({url})",
-    )
-    embed.set_image(url=TRANSPARENT_PNG)
-    embed.set_thumbnail(url=STOCK_LOGO % symbol)
-    webhook.add_embed(embed)
-
-    webhook.execute()
 
 
 def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
