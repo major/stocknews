@@ -40,7 +40,7 @@ def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
     )
 
     mastodon.status_post(
-        f"{symbol}: {company_name}\n\n{description}\n\n#stocks #markets #finance #earnings #{symbol}"
+        f"{symbol}: {company_name}\n\n{description}\n\n#stocks #earnings #{symbol}"
     )
 
 
