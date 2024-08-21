@@ -12,24 +12,9 @@ NEWS_API_ENDPOINT = os.getenv("NEWS_API_ENDPOINT", "https://localhost")
 # How far back to gather news articles (in minutes).
 NEWS_TIME_PERIOD = 10
 
-# Blocked tickers that we don't want to see.
-BLOCKED_TICKERS = [
-    "ADAUSD",
-    "AVAXUSD",
-    "BNBUSD",
-    "BTCUSD",
-    "DOGEUSD",
-    "ETHUSD",
-    "LINKUSD",
-    "MATICUSD",
-    "PEPEUSD",
-    "SHIBUSD",
-    "SOLUSD",
-    "TONUSD",
-    "USDCUSD",
-    "USDTUSD",
-    "XRPUSD",
-]
+# Read in a list of allowed tickers.
+with open("stocknews/ticker_allowlist.txt") as fileh:
+    ALLOWED_TICKERS = fileh.read().splitlines()
 
 # Redis connection details
 REDIS_HOST: str = os.environ.get("REDIS_HOST", "localhost")

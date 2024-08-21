@@ -7,7 +7,7 @@ from typing import Optional
 
 from redis import Redis
 
-from stocknews.config import BLOCKED_PHRASES, BLOCKED_TICKERS, REDIS_HOST, REDIS_PORT
+from stocknews.config import BLOCKED_PHRASES, REDIS_HOST, REDIS_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +49,6 @@ def is_earnings_news(symbols: list, headline: str) -> bool:
     regex = r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[K|M|B]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[K|M|B]*)"
     matches = re.search(regex, headline)
     return matches is not None
-
-
-def is_blocked_ticker(symbols: list) -> bool:
-    """Check to see if a blocked/excluded ticker is included in the news article."""
-    if len(set(BLOCKED_TICKERS).intersection(symbols)) > 0:
-        return True
-
-    return False
 
 
 def extract_earnings_data(headline: str) -> dict:

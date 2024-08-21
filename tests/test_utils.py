@@ -48,14 +48,6 @@ def test_is_earnings_news_regex():
     assert not any(utils.is_earnings_news(["XYZ"], headline) for headline in headlines)
 
 
-def test_is_blocked_ticker():
-    utils.BLOCKED_TICKERS = ["AAPL", "GOOGL"]
-    assert utils.is_blocked_ticker(["AAPL"])
-    assert not utils.is_blocked_ticker(["TSLA"])
-    assert utils.is_blocked_ticker(["AAPL", "TSLA"])
-    assert not utils.is_blocked_ticker(["TSLA", "MSFT"])
-
-
 def test_extract_earnings_data():
     """Verify that we can parse EPS results."""
     headline = "Nutanix Q3 2024 Adj EPS $0.28 Beats $0.17 Estimate, Sales $524.577M Beat $516.183M Estimate"

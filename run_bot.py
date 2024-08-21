@@ -6,6 +6,7 @@ from time import sleep
 
 from schedule import every, repeat, run_pending
 
+from stocknews.config import ALLOWED_TICKERS
 from stocknews.news import get_all_news
 from stocknews.notify import (
     send_earnings_to_discord,
@@ -13,8 +14,6 @@ from stocknews.notify import (
 )
 from stocknews.utils import (
     article_in_cache,
-    has_blocked_phrases,
-    is_blocked_ticker,
     is_earnings_news,
 )
 
@@ -33,22 +32,14 @@ def fetch_news() -> None:
             )
             continue
 
-        if is_blocked_ticker(news_item["symbols"]):
-            log.info(
-                f"🚫 Blocked symbols: {news_item["symbols"]} {news_item['headline']}"
-            )
-            continue
-
-        if has_blocked_phrases(news_item["headline"]):
-            log.info(
-                f"🚫 Blocked phrases: {news_item["symbols"]} {news_item['headline']}"
-            )
-            continue
-
         if len(news_item["symbols"]) > 1:
             log.info(
                 f"🐘 Too many symbols: {news_item["symbols"]} {news_item['headline']}"
             )
+            continue
+
+        if news_item["symbols"] not in ALLOWED_TICKERS:
+            log.info(f"🚫 No symbols: {news_item['headline']}")
             continue
 
         if article_in_cache(news_item["symbols"], news_item["headline"]):
