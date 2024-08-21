@@ -27,26 +27,23 @@ def fetch_news() -> None:
 
     for news_item in news_items:
         if news_item["author"] != "Benzinga Newsdesk":
-            log.info(
-                f"🚫 Blocked author: {news_item["symbols"]} {news_item['headline']}"
-            )
             continue
 
         if len(news_item["symbols"]) > 1:
-            log.info(
-                f"🐘 Too many symbols: {news_item["symbols"]} {news_item['headline']}"
-            )
             continue
 
-        if news_item["symbols"] not in ALLOWED_TICKERS:
-            log.info(f"🚫 No symbols: {news_item['headline']}")
-            continue
-
-        if article_in_cache(news_item["symbols"], news_item["headline"]):
-            log.info(f"👎 Article in cache: {news_item['headline']}")
-            continue
-
+        # Trigger a notification if this is an earnings report.
         if is_earnings_news(news_item["symbols"], news_item["headline"]):
+            # Verify that the ticker is in our allowlist.
+            if news_item["symbols"] not in ALLOWED_TICKERS:
+                log.info(f"🚫 No symbols: {news_item['headline']}")
+                continue
+
+            # Skip the article if it's already in the cache.
+            if article_in_cache(news_item["symbols"], news_item["headline"]):
+                log.info(f"👎 Article in cache: {news_item['headline']}")
+                continue
+
             log.info(f"💸 Earnings news: {news_item['headline']}")
             send_earnings_to_discord(news_item["symbols"], news_item["headline"])
             send_earnings_to_mastodon(news_item["symbols"], news_item["headline"])
