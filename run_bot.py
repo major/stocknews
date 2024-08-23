@@ -29,13 +29,13 @@ def fetch_news() -> None:
         if news_item["author"] != "Benzinga Newsdesk":
             continue
 
-        if len(news_item["symbols"]) > 1:
+        if len(news_item["symbols"]) != 1:
             continue
 
         # Trigger a notification if this is an earnings report.
         if is_earnings_news(news_item["symbols"], news_item["headline"]):
             # Verify that the ticker is in our allowlist.
-            if news_item["symbols"] not in ALLOWED_TICKERS:
+            if news_item["symbols"][0] not in ALLOWED_TICKERS:
                 log.info(
                     f"🚫 Ticker not allowed: {news_item["symbols"]}: {news_item['headline']}"
                 )
