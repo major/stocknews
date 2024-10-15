@@ -1,5 +1,5 @@
 # From https://fastapi.tiangolo.com/deployment/docker/#docker-image-with-poetry
-FROM python:3.13 AS requirements-stage
+FROM docker.io/library/python:3.13
 WORKDIR /app
 
 RUN pip install -U pip poetry
