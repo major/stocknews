@@ -98,7 +98,6 @@ jobs:
         with:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          oci: true
           tls-verify: true
           extra-args: |
             --squash
