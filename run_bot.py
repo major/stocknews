@@ -39,7 +39,7 @@ def fetch_news() -> None:
                 log.info(
                     f"🚫 Ticker not allowed: {news_item["symbols"]}: {news_item['headline']}"
                 )
-                continue
+                #continue
 
             # Skip the article if it's already in the cache.
             if article_in_cache(news_item["symbols"], news_item["headline"]):
