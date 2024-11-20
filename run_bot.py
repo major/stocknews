@@ -6,7 +6,6 @@ from time import sleep
 
 from schedule import every, repeat, run_pending
 
-from stocknews.config import ALLOWED_TICKERS
 from stocknews.news import get_all_news
 from stocknews.notify import (
     send_earnings_to_discord,

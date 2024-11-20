@@ -76,10 +76,7 @@ def extract_earnings_data(headline: str) -> dict:
 
 def parse_earnings_result(raw_result: str) -> bool:
     """Parse the earnings result from a headline."""
-    if "beat" in raw_result.lower():
-        return True
-
-    return False
+    return "beat" in raw_result.lower()
 
 
 def get_company_name(headline: str) -> str:
