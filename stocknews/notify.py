@@ -81,16 +81,18 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
     match report.price_target_action.lower():
         case "announces":
             emoji = "📢"
+            notification_color = "FFFFFF"
         case "lowers":
-            emoji = "️♥️"
+            emoji = "️💔"
+            notification_color = "D42020"
         case "raises":
             emoji = "💚"
+            notification_color = "080000"
 
     price_target = f"${report.price_target:.2f}"
 
     webhook = DiscordWebhook(
-        url=DISCORD_ANALYST_WEBHOOK,
-        rate_limit_retry=True,
+        url=DISCORD_ANALYST_WEBHOOK, rate_limit_retry=True, color=notification_color
     )
     embed = DiscordEmbed(
         title=f"{emoji} {symbol}: {report.stock} {price_target}",
