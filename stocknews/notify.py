@@ -88,6 +88,9 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
         case "raises":
             emoji = "💚"
             notification_color = "080000"
+        case _:
+            emoji = "🤷‍♂️"
+            notification_color = "000000"
 
     price_target = f"${report.price_target:.2f}"
 
