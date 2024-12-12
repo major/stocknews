@@ -22,6 +22,7 @@ REDIS_PORT: int = int(os.environ.get("REDIS_PORT", 6379))
 
 # Discord Channels
 DISCORD_EARNINGS_WEBHOOK = os.getenv("DISCORD_EARNINGS_WEBHOOK", "missing")
+DISCORD_ANALYST_WEBHOOK = os.getenv("DISCORD_ANALYST_WEBHOOK", "missing")
 
 # Mastodon authentication
 MASTODON_SERVER_URL = os.getenv("MASTODON_SERVER_URL", "missing")

@@ -5,7 +5,9 @@ import logging
 from discord_webhook import DiscordEmbed, DiscordWebhook
 from mastodon import Mastodon
 
+from stocknews.analyst import AnalystNews
 from stocknews.config import (
+    DISCORD_ANALYST_WEBHOOK,
     DISCORD_EARNINGS_WEBHOOK,
     MASTODON_SERVER_TOKEN,
     MASTODON_SERVER_URL,
@@ -61,6 +63,38 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
     embed = DiscordEmbed(
         title=f"{symbol}: {company_name}",
         description=description,
+    )
+    embed.set_image(url=TRANSPARENT_PNG)
+    embed.set_thumbnail(url=STOCK_LOGO % symbol)
+    # embed.set_footer(text=f"Raw news: {headline}")
+
+    webhook.add_embed(embed)
+
+    webhook.execute()
+
+
+def send_rating_change_to_discord(symbols: list, headline: str) -> None:
+    """Send an analyst ratings change to a Discord webhook"""
+    symbol = symbols[0]
+    report = AnalystNews(headline)
+
+    match report.price_target_action.lower():
+        case "announces":
+            emoji = "📢"
+        case "lowers":
+            emoji = "️♥️"
+        case "raises":
+            emoji = "💚"
+
+    price_target = f"${report.price_target:.2f}"
+
+    webhook = DiscordWebhook(
+        url=DISCORD_ANALYST_WEBHOOK,
+        rate_limit_retry=True,
+    )
+    embed = DiscordEmbed(
+        title=f"{emoji} {symbol}: {report.stock} {price_target}",
+        description=headline,
     )
     embed.set_image(url=TRANSPARENT_PNG)
     embed.set_thumbnail(url=STOCK_LOGO % symbol)

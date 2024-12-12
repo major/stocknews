@@ -11,6 +11,7 @@ from stocknews.news import get_all_news
 from stocknews.notify import (
     send_earnings_to_discord,
     send_earnings_to_mastodon,
+    send_rating_change_to_discord,
 )
 from stocknews.utils import article_in_cache, is_analyst_rating_change, is_earnings_news
 
@@ -39,11 +40,14 @@ def fetch_news() -> None:
             continue
 
         # Trigger a notification for analyst ratings changes.
-        if is_analyst_rating_change(news_item["headline"]) and not article_in_cache(
-            news_item["symbols"], news_item["headline"]
-        ):
+        if is_analyst_rating_change(news_item["headline"]):
+            # Skip the article if it's already in the cache.
+            if article_in_cache(news_item["symbols"], news_item["headline"]):
+                log.info(f"👎 Article in cache: {news_item['headline']}")
+                continue
+
             log.info(f"📈 Analyst rating change: {AnalystNews(news_item['headline'])}")
-            # send_rating_change_to_discord(news_item["symbols"], news_item["headline"])
+            send_rating_change_to_discord(news_item["symbols"], news_item["headline"])
             continue
 
         log.info(f"📰 Non-earnings news: {news_item['headline']}")

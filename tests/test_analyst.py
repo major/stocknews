@@ -64,6 +64,15 @@ sample_reports = [
         "price_target_action": "Raises",
         "price_target": "212",
     },
+    {
+        "headline": "Jones Trading Initiates Coverage On Hut 8 with Buy Rating, Announces Price Target of $36",
+        "firm": "Jones Trading",
+        "action": "Initiates Coverage",
+        "guidance": "Buy",
+        "stock": "Hut 8",
+        "price_target_action": "Announces",
+        "price_target": "36",
+    },
 ]
 
 
