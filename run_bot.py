@@ -6,15 +6,13 @@ from time import sleep
 
 from schedule import every, repeat, run_pending
 
+from stocknews.analyst import AnalystNews
 from stocknews.news import get_all_news
 from stocknews.notify import (
     send_earnings_to_discord,
     send_earnings_to_mastodon,
 )
-from stocknews.utils import (
-    article_in_cache,
-    is_earnings_news,
-)
+from stocknews.utils import article_in_cache, is_analyst_rating_change, is_earnings_news
 
 # Setup our shared logger.
 log = logging.getLogger(__name__)
@@ -38,8 +36,17 @@ def fetch_news() -> None:
             log.info(f"💸 Earnings news: {news_item['headline']}")
             send_earnings_to_discord(news_item["symbols"], news_item["headline"])
             send_earnings_to_mastodon(news_item["symbols"], news_item["headline"])
-        else:
-            log.info(f"📰 Non-earnings news: {news_item['headline']}")
+            continue
+
+        # Trigger a notification for analyst ratings changes.
+        if is_analyst_rating_change(news_item["headline"]) and not article_in_cache(
+            news_item["symbols"], news_item["headline"]
+        ):
+            log.info(f"📈 Analyst rating change: {AnalystNews(news_item['headline'])}")
+            # send_rating_change_to_discord(news_item["symbols"], news_item["headline"])
+            continue
+
+        log.info(f"📰 Non-earnings news: {news_item['headline']}")
 
 
 if __name__ == "__main__":

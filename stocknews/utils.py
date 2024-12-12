@@ -108,3 +108,8 @@ def get_earnings_notification_description(headline: str) -> str:
 def has_blocked_phrases(headline: str) -> bool:
     """Check if the headline contains blocked phrases."""
     return any(x in headline.lower() for x in BLOCKED_PHRASES)
+
+
+def is_analyst_rating_change(headline: str) -> bool:
+    """Check if the headline is an analyst rating change."""
+    return "price target" in headline.lower()

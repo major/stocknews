@@ -170,3 +170,11 @@ def test_has_blocked_phrases():
 
     headline = "Manulife Financial Increases Its Core ROE Target To 18% Plus By 2027"
     assert utils.has_blocked_phrases(headline) is False
+
+
+def test_is_analyst_rating_change():
+    """Verify we can identify a ratings change."""
+    good = "Wells Fargo Upgrades Ares Management to Overweight, Raises Price Target to $212"
+    bad = "Wells Fargo Unusual Options Activity For December 12"
+    assert utils.is_analyst_rating_change(good)
+    assert not utils.is_analyst_rating_change(bad)
