@@ -50,7 +50,7 @@ def fetch_news() -> None:
             send_rating_change_to_discord(news_item["symbols"], news_item["headline"])
             continue
 
-        log.info(f"📰 Non-earnings news: {news_item['headline']}")
+        log.info(f"🤷‍♂️ Unknown news type: {news_item['headline']}")
 
 
 if __name__ == "__main__":
