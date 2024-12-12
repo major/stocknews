@@ -76,6 +76,11 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
 def send_rating_change_to_discord(symbols: list, headline: str) -> None:
     """Send an analyst ratings change to a Discord webhook"""
     symbol = symbols[0]
+
+    # Sorry, Canada. 🇨🇦
+    if symbol.startswith("TSX:"):
+        return None
+
     report = AnalystNews(headline)
 
     match report.price_target_action.lower():
@@ -102,7 +107,6 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
     )
     embed.set_image(url=TRANSPARENT_PNG)
     embed.set_thumbnail(url=STOCK_LOGO % symbol)
-    # embed.set_footer(text=f"Raw news: {headline}")
 
     webhook.add_embed(embed)
 
