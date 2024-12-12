@@ -91,12 +91,11 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
 
     price_target = f"${report.price_target:.2f}"
 
-    webhook = DiscordWebhook(
-        url=DISCORD_ANALYST_WEBHOOK, rate_limit_retry=True, color=notification_color
-    )
+    webhook = DiscordWebhook(url=DISCORD_ANALYST_WEBHOOK, rate_limit_retry=True)
     embed = DiscordEmbed(
         title=f"{emoji} {symbol}: {report.stock} {price_target}",
         description=headline,
+        color=notification_color,
     )
     embed.set_image(url=TRANSPARENT_PNG)
     embed.set_thumbnail(url=STOCK_LOGO % symbol)
