@@ -25,9 +25,6 @@ def fetch_news() -> None:
     news_items = get_all_news()
 
     for news_item in news_items:
-        if news_item["author"] != "Benzinga Newsdesk":
-            continue
-
         if len(news_item["symbols"]) != 1:
             continue
 
@@ -41,6 +38,8 @@ def fetch_news() -> None:
             log.info(f"💸 Earnings news: {news_item['headline']}")
             send_earnings_to_discord(news_item["symbols"], news_item["headline"])
             send_earnings_to_mastodon(news_item["symbols"], news_item["headline"])
+        else:
+            log.info(f"📰 Non-earnings news: {news_item['headline']}")
 
 
 if __name__ == "__main__":
