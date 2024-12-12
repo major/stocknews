@@ -14,7 +14,7 @@ class AnalystNews:
     guidance: str = ""
     stock: str = ""
     price_target_action: str = ""
-    price_target: str = ""
+    price_target: float = 0
 
     def __post_init__(self) -> None:
         """Parse the headline after initialization."""
@@ -65,7 +65,7 @@ class AnalystNews:
 
     def parse_price_target(self) -> None:
         """Parse the price target change from the second half of the headline."""
-        self.price_target = self.extract_value(r"\$([\d\.]+)")
+        self.price_target = float(self.extract_value(r"\$([\d\.]+)"))
         self.price_target_action = self.extract_value(
             r", (Lowers|Maintains|Raises|Announces)"
         )

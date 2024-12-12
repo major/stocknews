@@ -8,7 +8,7 @@ sample_reports = [
         "guidance": "Market Outperform",
         "stock": "Ready Capital",
         "price_target_action": "Lowers",
-        "price_target": "9.5",
+        "price_target": 9.5,
     },
     {
         "headline": "Wells Fargo Maintains Equal-Weight on Bath & Body Works, Raises Price Target to $42",
@@ -17,7 +17,7 @@ sample_reports = [
         "guidance": "Equal-Weight",
         "stock": "Bath & Body Works",
         "price_target_action": "Raises",
-        "price_target": "42",
+        "price_target": 42,
     },
     {
         "headline": "Oppenheimer Maintains Outperform on Toll Brothers, Maintains $189 Price Target",
@@ -26,7 +26,7 @@ sample_reports = [
         "guidance": "Outperform",
         "stock": "Toll Brothers",
         "price_target_action": "Maintains",
-        "price_target": "189",
+        "price_target": 189,
     },
     {
         "headline": "JMP Securities Reiterates Market Outperform on Relay Therapeutics, Maintains $21 Price Target",
@@ -35,7 +35,7 @@ sample_reports = [
         "guidance": "Market Outperform",
         "stock": "Relay Therapeutics",
         "price_target_action": "Maintains",
-        "price_target": "21",
+        "price_target": 21,
     },
     {
         "headline": "Leerink Partners Downgrades LAVA Therapeutics to Market Perform, Lowers Price Target to $2",
@@ -44,7 +44,7 @@ sample_reports = [
         "guidance": "Market Perform",
         "stock": "LAVA Therapeutics",
         "price_target_action": "Lowers",
-        "price_target": "2",
+        "price_target": 2,
     },
     {
         "headline": "Wells Fargo Initiates Coverage On Xencor with Overweight Rating, Announces Price Target of $37",
@@ -53,7 +53,7 @@ sample_reports = [
         "guidance": "Overweight",
         "stock": "Xencor",
         "price_target_action": "Announces",
-        "price_target": "37",
+        "price_target": 37,
     },
     {
         "headline": "Wells Fargo Upgrades Ares Management to Overweight, Raises Price Target to $212",
@@ -62,7 +62,7 @@ sample_reports = [
         "guidance": "Overweight",
         "stock": "Ares Management",
         "price_target_action": "Raises",
-        "price_target": "212",
+        "price_target": 212,
     },
     {
         "headline": "Jones Trading Initiates Coverage On Hut 8 with Buy Rating, Announces Price Target of $36",
@@ -71,7 +71,7 @@ sample_reports = [
         "guidance": "Buy",
         "stock": "Hut 8",
         "price_target_action": "Announces",
-        "price_target": "36",
+        "price_target": 36,
     },
 ]
 
