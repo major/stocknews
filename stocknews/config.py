@@ -29,7 +29,7 @@ MASTODON_SERVER_URL = os.getenv("MASTODON_SERVER_URL", "missing")
 MASTODON_SERVER_TOKEN = os.getenv("MASTODON_SERVER_TOKEN", "missing")
 
 # Stock logo URL.
-STOCK_LOGO = "https://s3.amazonaws.com/logos.atom.finance/stocks-and-funds/%s.png"
+STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 
 # Transparent long PNG to make all embeds the same length
 TRANSPARENT_PNG = "https://major.io/transparent.png"

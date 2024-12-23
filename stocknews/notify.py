@@ -65,7 +65,7 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
         description=description,
     )
     embed.set_image(url=TRANSPARENT_PNG)
-    embed.set_thumbnail(url=STOCK_LOGO % symbol)
+    embed.set_thumbnail(url=STOCK_LOGO % symbol.lower())
     # embed.set_footer(text=f"Raw news: {headline}")
 
     webhook.add_embed(embed)
@@ -106,7 +106,7 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
         color=notification_color,
     )
     embed.set_image(url=TRANSPARENT_PNG)
-    embed.set_thumbnail(url=STOCK_LOGO % symbol)
+    embed.set_thumbnail(url=STOCK_LOGO % symbol.lower())
 
     webhook.add_embed(embed)
 
