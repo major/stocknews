@@ -83,10 +83,12 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
 
     report = AnalystNews(headline)
 
+    notify_for_status = True
     match report.price_target_action.lower():
         case "announces" | "maintains":
             emoji = "📢"
             notification_color = "FFFFFF"
+            notify_for_status = False
         case "lowers":
             emoji = "️💔"
             notification_color = "D42020"
@@ -96,6 +98,9 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
         case _:
             emoji = "🤷‍♂️"
             notification_color = "000000"
+
+    if not notify_for_status:
+        return None
 
     price_target = f"${report.price_target:.2f}"
 
