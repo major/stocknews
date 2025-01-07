@@ -1,19 +1,19 @@
-[tool.poetry]
+[project]
 name = "stocknews"
 version = "0.0.1"
 description = "Deliver stock news to Discord"
-authors = ["Major Hayden <major@mhtx.net>"]
+authors = [{ name = "Major Hayden", email = "major@mhtx.net" }]
 repository = "https://github.com/major/stocknews"
 documentation = "https://major.github.io/stocknews/"
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = ">=3.13,<4.0"
-httpx = "^0.28.0"
-redis = {extras = ["hiredis"], version = "^5.2.1"}
-discord-webhook = "^1.3.1"
-schedule = "^1.2.2"
-mastodon-py = "^1.8.1"
+requires-python = ">=3.13,<4.0"
+dependencies = [
+    "httpx (>=0.28.1,<0.29.0)",
+    "redis[hiredis] (>=5.2.1,<6.0.0)",
+    "discord-webhook (>=1.3.1,<2.0.0)",
+    "schedule (>=1.2.2,<2.0.0)",
+    "mastodon-py (>=1.8.1,<2.0.0)",
+]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
@@ -74,7 +74,8 @@ select = [
     # mccabe
     "C90",
     # pycodestyle
-    "E", "W",
+    "E",
+    "W",
     # pyflakes
     "F",
     # pygrep-hooks
