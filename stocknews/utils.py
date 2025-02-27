@@ -7,11 +7,22 @@ from typing import Optional
 
 from redis import Redis
 
-from stocknews.config import BLOCKED_PHRASES, REDIS_HOST, REDIS_PORT
+from stocknews.config import settings
 
 logger = logging.getLogger(__name__)
 
-REDIS_CONN = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+REDIS_CONN = Redis(
+    host=settings.redis_host, port=settings.redis_port, decode_responses=True
+)
+
+
+def check_redis() -> None:
+    """Check if Redis is reachable."""
+    try:
+        REDIS_CONN.ping()
+        logger.info("Redis is reachable")
+    except Exception:
+        logger.exception("Redis connection error")
 
 
 def article_in_cache(symbols: list, headline: str) -> bool:
@@ -107,7 +118,7 @@ def get_earnings_notification_description(headline: str) -> str:
 
 def has_blocked_phrases(headline: str) -> bool:
     """Check if the headline contains blocked phrases."""
-    return any(x in headline.lower() for x in BLOCKED_PHRASES)
+    return any(x in headline.lower() for x in settings.blocked_phrases)
 
 
 def is_analyst_rating_change(headline: str) -> bool:

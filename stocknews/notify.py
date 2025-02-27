@@ -7,12 +7,7 @@ from mastodon import Mastodon
 
 from stocknews.analyst import AnalystNews
 from stocknews.config import (
-    DISCORD_ANALYST_WEBHOOK,
-    DISCORD_EARNINGS_WEBHOOK,
-    MASTODON_SERVER_TOKEN,
-    MASTODON_SERVER_URL,
-    STOCK_LOGO,
-    TRANSPARENT_PNG,
+    settings,
 )
 from stocknews.utils import get_company_name, get_earnings_notification_description
 
@@ -38,7 +33,8 @@ def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
         return
 
     mastodon = Mastodon(
-        access_token=MASTODON_SERVER_TOKEN, api_base_url=MASTODON_SERVER_URL
+        access_token=settings.mastodon_server_token,
+        api_base_url=settings.mastodon_server_url,
     )
 
     mastodon.status_post(
@@ -57,15 +53,15 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
         return
 
     webhook = DiscordWebhook(
-        url=DISCORD_EARNINGS_WEBHOOK,
+        url=settings.discord_earnings_webhook,
         rate_limit_retry=True,
     )
     embed = DiscordEmbed(
         title=f"{symbol}: {company_name}",
         description=description,
     )
-    embed.set_image(url=TRANSPARENT_PNG)
-    embed.set_thumbnail(url=STOCK_LOGO % symbol.lower())
+    embed.set_image(url=settings.transparent_png)
+    embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
     # embed.set_footer(text=f"Raw news: {headline}")
 
     webhook.add_embed(embed)
@@ -104,14 +100,16 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
 
     price_target = f"${report.price_target:.2f}"
 
-    webhook = DiscordWebhook(url=DISCORD_ANALYST_WEBHOOK, rate_limit_retry=True)
+    webhook = DiscordWebhook(
+        url=settings.discord_analyst_webhook, rate_limit_retry=True
+    )
     embed = DiscordEmbed(
         title=f"{emoji} {symbol}: {report.stock} {price_target}",
         description=headline,
         color=notification_color,
     )
-    embed.set_image(url=TRANSPARENT_PNG)
-    embed.set_thumbnail(url=STOCK_LOGO % symbol.lower())
+    embed.set_image(url=settings.transparent_png)
+    embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
 
     webhook.add_embed(embed)
 

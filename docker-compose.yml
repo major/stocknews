@@ -1,0 +1,14 @@
+services:
+  stocknews:
+    container_name: stocknews
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+    restart: unless-stopped
+
+  redis:
+    container_name: redis
+    image: docker.io/library/redis:alpine
+    restart: unless-stopped
