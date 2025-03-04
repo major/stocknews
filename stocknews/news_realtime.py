@@ -73,6 +73,9 @@ class AlpacaNewsClient:
         ):
             logger.info(f"💸 Earnings news for {symbols[0]}: {headline}")
             notify.send_earnings_to_discord(news_item["symbols"], news_item["headline"])
+            notify.send_earnings_to_mastodon(
+                news_item["symbols"], news_item["headline"]
+            )
             return None
 
         # Take a new analyst report we haven't seen before and process it.
