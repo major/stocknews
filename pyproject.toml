@@ -43,6 +43,10 @@ warn_unused_ignores = "True"
 show_error_codes = "True"
 
 [[tool.mypy.overrides]]
+module = "discord_webhook"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "mastodon"
 ignore_missing_imports = true
 
