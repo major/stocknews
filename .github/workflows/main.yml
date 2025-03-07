@@ -29,6 +29,9 @@ jobs:
           python -m pip install --upgrade pip pipx
           pipx install poetry
 
+      - name: Install dependencies
+        run: poetry install
+
       - name: Run tox
         run: poetry run tox
 
