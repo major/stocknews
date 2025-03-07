@@ -27,13 +27,14 @@ class AlpacaNewsClient:
         print(f"Connecting to {websocket_url}...")
 
         async with aiohttp.ClientSession() as session, session.ws_connect(
-            websocket_url, headers=headers
+            websocket_url, headers=headers, heartbeat=30
         ) as ws:
             logger.info("WebSocket connection opened")
 
             # Subscribe to all news
             subscribe_msg = {"action": "subscribe", "news": ["*"]}
             await ws.send_json(subscribe_msg)
+            logger.info("Sent subscription message")
 
             try:
                 async for msg in ws:
