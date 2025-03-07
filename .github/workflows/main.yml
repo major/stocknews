@@ -46,55 +46,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Log into Docker hub for authenticated pulls
-        if: github.event_name != 'pull_request'
-        uses: redhat-actions/podman-login@v1
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          registry: docker.io
-          username: major
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Log into registry ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
-        uses: redhat-actions/podman-login@v1
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5.7.0
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
-      - name: Build image
-        id: build-image
-        uses: redhat-actions/buildah-build@v2
-        with:
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          tls-verify: true
-          extra-args: |
-            --squash
-          containerfiles: |
-            Dockerfile
-
-      - name: Echo Outputs
-        run: |
-          echo "Image: ${{ steps.build-image.outputs.image }}"
-          echo "Tags: ${{ steps.build-image.outputs.tags }}"
-          echo "Tagged Image: ${{ steps.build-image.outputs.image-with-tag }}"
-
-      - name: Check images created
-        run: buildah images
-
-      - name: Push To Container Registry
-        id: push-to-container-registry
-        uses: redhat-actions/push-to-registry@v2
-        if: github.event_name != 'pull_request'
-        with:
-          tags: ${{ steps.build-image.outputs.tags }}
-
-      - name: Print image url
-        run: echo "Image pushed to ${{ steps.push-to-container-registry.outputs.registry-paths }}"
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
