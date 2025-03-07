@@ -26,9 +26,10 @@ class AlpacaNewsClient:
         websocket_url = settings.alpaca_news_stream_url
         print(f"Connecting to {websocket_url}...")
 
-        async with aiohttp.ClientSession() as session, session.ws_connect(
-            websocket_url, headers=headers, heartbeat=30
-        ) as ws:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.ws_connect(websocket_url, headers=headers, heartbeat=30) as ws,
+        ):
             logger.info("WebSocket connection opened")
 
             # Subscribe to all news
