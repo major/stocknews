@@ -90,7 +90,7 @@ class AlpacaNewsClient:
             )
             return None
 
-        logger.info(f"🤷‍♂️ Unknown news type: {news_item['headline']}")
+        logger.info(f"🤷‍♂️ Unknown: {symbols[0]} {news_item['headline']}")
 
 
 async def main_async() -> None:
