@@ -26,7 +26,7 @@ pytest-randomly = "^3.16.0"
 fakeredis = "^2.27.0"
 deptry = "^0.23.0"
 pytest-asyncio = "^0.25.3"
-ruff = "^0.9.10"
+ruff = "^0.10.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
