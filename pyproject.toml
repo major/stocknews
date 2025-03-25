@@ -25,7 +25,7 @@ pytest-sugar = "^1.0.0"
 pytest-randomly = "^3.16.0"
 fakeredis = "^2.27.0"
 deptry = "^0.23.0"
-pytest-asyncio = "^0.25.3"
+pytest-asyncio = "^0.26.0"
 ruff = "^0.11.0"
 
 [build-system]
