@@ -28,7 +28,7 @@ class AlpacaNewsClient:
         }
 
         websocket_url = settings.alpaca_news_stream_url
-        print(f"Connecting to {websocket_url}...")
+        logger.info(f"Connecting to {websocket_url}...")
 
         async with (
             aiohttp.ClientSession() as session,
@@ -46,13 +46,13 @@ class AlpacaNewsClient:
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         await self.handle_message(msg.data)
                     elif msg.type == aiohttp.WSMsgType.ERROR:
-                        print(f"WebSocket error: {msg}")
+                        logger.error(f"WebSocket error: {msg}")
                         break
             except asyncio.CancelledError:
-                print("\nDisconnecting from WebSocket...")
+                logger.info("\nDisconnecting from WebSocket...")
                 await ws.close()
             except Exception as e:
-                print(f"Error: {e}")
+                logger.exception(f"Error: {e}")
 
     async def handle_message(self, message: str) -> None:
         """Handle incoming WebSocket messages"""
@@ -63,7 +63,7 @@ class AlpacaNewsClient:
             if isinstance(item, dict) and item.get("T") == "n":
                 self.process_news_item(item)
             else:
-                print(f"Connection message: {item}")
+                logger.info(f"Connection message: {item}")
 
     def process_news_item(self, news_item: dict) -> None:
         """Process and display a news item"""
@@ -119,7 +119,7 @@ async def main_async() -> None:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    print("Done.")
+    logger.info("Done. 🎉")
 
 
 def main() -> None:
