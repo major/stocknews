@@ -5,11 +5,15 @@ import json
 import logging
 
 import aiohttp
+import structlog
 
 from stocknews import notify, utils
 from stocknews.config import settings
 
-logger = logging.getLogger(__name__)
+structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+)
+logger = structlog.get_logger()
 
 
 class AlpacaNewsClient:

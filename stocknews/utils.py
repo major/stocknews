@@ -5,11 +5,16 @@ import re
 from hashlib import sha256
 from typing import Optional
 
+import structlog
 from redis import Redis
 
 from stocknews.config import settings
 
-logger = logging.getLogger(__name__)
+structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+)
+
+logger = structlog.get_logger()
 
 REDIS_CONN = Redis(
     host=settings.redis_host, port=settings.redis_port, decode_responses=True

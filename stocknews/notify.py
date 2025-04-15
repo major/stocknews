@@ -2,6 +2,7 @@
 
 import logging
 
+import structlog
 from discord_webhook import DiscordEmbed, DiscordWebhook
 from mastodon import Mastodon
 
@@ -11,7 +12,11 @@ from stocknews.config import (
 )
 from stocknews.utils import get_company_name, get_earnings_notification_description
 
-log = logging.getLogger(__name__)
+structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+)
+
+logger = structlog.get_logger()
 
 
 def get_username(symbols: list) -> str:
@@ -29,7 +34,7 @@ def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
     description = get_earnings_notification_description(headline)
 
     if not description:
-        log.warning("No earnings description found for %s", headline)
+        logger.warning("No earnings description found for %s", headline)
         return
 
     mastodon = Mastodon(
@@ -49,7 +54,7 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
     description = get_earnings_notification_description(headline)
 
     if not description:
-        log.warning("No earnings description found for %s", headline)
+        logger.warning("No earnings description found for %s", headline)
         return
 
     webhook = DiscordWebhook(
