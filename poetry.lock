@@ -1308,6 +1308,7 @@ files = [
 
 [package.dependencies]
 certifi = "*"
+httpx = {version = ">=0.16.0", optional = true, markers = "extra == \"httpx\""}
 urllib3 = ">=1.26.11"
 
 [package.extras]
@@ -1566,4 +1567,4 @@ h11 = ">=0.9.0,<1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0"
-content-hash = "188e976ced6d93be00774ebf3a3f25726d2575277e605f12132ad062d497602b"
+content-hash = "98ae735e7d59a60e289c1373fa2728f794954d38126c6090b72907b1bac09b87"
