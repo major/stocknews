@@ -24,5 +24,7 @@ class Settings(BaseSettings):
     transparent_png: str = "https://major.io/transparent.png"
     blocked_phrases: list = ["if you invested", "you would have", "would be worth"]
 
+    sentry_dsn: str = ""
+
 
 settings = Settings()

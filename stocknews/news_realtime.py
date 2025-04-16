@@ -5,6 +5,7 @@ import json
 import logging
 
 import aiohttp
+import sentry_sdk
 import structlog
 
 from stocknews import notify, utils
@@ -128,4 +129,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    sentry_sdk.init(dsn=settings.sentry_dsn, send_default_pii=True)
     main()
