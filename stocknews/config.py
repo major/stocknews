@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     blocked_phrases: list = ["if you invested", "you would have", "would be worth"]
 
     sentry_dsn: str = ""
+    sentry_debug: bool = True
 
 
 settings = Settings()

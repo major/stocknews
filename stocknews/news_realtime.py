@@ -92,6 +92,7 @@ def main() -> None:
     """Main function to run the news streaming."""
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
+        debug=settings.sentry_debug,
         send_default_pii=True,
         traces_sample_rate=0.25,
         profile_session_sample_rate=0.25,
