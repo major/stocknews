@@ -1,90 +1,90 @@
-"""Tests for the analyst guidance parsing."""
+import pytest
 
-sample_reports = [
-    {
-        "headline": "JMP Securities Maintains Market Outperform on Ready Capital, Lowers Price Target to $9.5",
-        "firm": "JMP Securities",
-        "action": "Maintains",
-        "guidance": "Market Outperform",
-        "stock": "Ready Capital",
-        "price_target_action": "Lowers",
-        "price_target": 9.5,
-    },
-    {
-        "headline": "Wells Fargo Maintains Equal-Weight on Bath & Body Works, Raises Price Target to $42",
-        "firm": "Wells Fargo",
-        "action": "Maintains",
-        "guidance": "Equal-Weight",
-        "stock": "Bath & Body Works",
-        "price_target_action": "Raises",
-        "price_target": 42,
-    },
-    {
-        "headline": "Oppenheimer Maintains Outperform on Toll Brothers, Maintains $189 Price Target",
-        "firm": "Oppenheimer",
-        "action": "Maintains",
-        "guidance": "Outperform",
-        "stock": "Toll Brothers",
-        "price_target_action": "Maintains",
-        "price_target": 189,
-    },
-    {
-        "headline": "JMP Securities Reiterates Market Outperform on Relay Therapeutics, Maintains $21 Price Target",
-        "firm": "JMP Securities",
-        "action": "Reiterates",
-        "guidance": "Market Outperform",
-        "stock": "Relay Therapeutics",
-        "price_target_action": "Maintains",
-        "price_target": 21,
-    },
-    {
-        "headline": "Leerink Partners Downgrades LAVA Therapeutics to Market Perform, Lowers Price Target to $2",
-        "firm": "Leerink Partners",
-        "action": "Downgrades",
-        "guidance": "Market Perform",
-        "stock": "LAVA Therapeutics",
-        "price_target_action": "Lowers",
-        "price_target": 2,
-    },
-    {
-        "headline": "Wells Fargo Initiates Coverage On Xencor with Overweight Rating, Announces Price Target of $37",
-        "firm": "Wells Fargo",
-        "action": "Initiates Coverage",
-        "guidance": "Overweight",
-        "stock": "Xencor",
-        "price_target_action": "Announces",
-        "price_target": 37,
-    },
-    {
-        "headline": "Wells Fargo Upgrades Ares Management to Overweight, Raises Price Target to $212",
-        "firm": "Wells Fargo",
-        "action": "Upgrades",
-        "guidance": "Overweight",
-        "stock": "Ares Management",
-        "price_target_action": "Raises",
-        "price_target": 212,
-    },
-    {
-        "headline": "Jones Trading Initiates Coverage On Hut 8 with Buy Rating, Announces Price Target of $36",
-        "firm": "Jones Trading",
-        "action": "Initiates Coverage",
-        "guidance": "Buy",
-        "stock": "Hut 8",
-        "price_target_action": "Announces",
-        "price_target": 36,
-    },
-]
+from stocknews.analyst import AnalystNews
 
 
-def test_analyst_news():
-    """Test the get_firm_and_action function."""
-    from stocknews.analyst import AnalystNews
+@pytest.fixture
+def maintains_headline():
+    return "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223"
 
-    for report in sample_reports:
-        obj = AnalystNews(report["headline"])
-        assert obj.firm == report["firm"]
-        assert obj.action == report["action"]
-        assert obj.guidance == report["guidance"]
-        assert obj.stock == report["stock"]
-        assert obj.price_target == report["price_target"]
-        assert obj.price_target_action == report["price_target_action"]
+
+@pytest.fixture
+def upgrades_headline():
+    return "Morgan Stanley Upgrades Tesla to Overweight, Raises Price Target to $400"
+
+
+@pytest.fixture
+def downgrades_headline():
+    return "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135"
+
+
+@pytest.fixture
+def initiates_headline():
+    return "Piper Sandler Initiates Coverage on Nvidia to Overweight, Announces Price Target to $850"
+
+
+def test_parse_maintains_headline(maintains_headline):
+    news = AnalystNews(maintains_headline)
+    assert news.firm == "Goldman Sachs"
+    assert news.action == "Maintains"
+    assert news.guidance == "Buy"
+    assert news.stock == "Apple"
+    assert news.price_target_action == "Raises"
+    assert news.price_target == 223.0
+
+
+def test_parse_upgrades_headline(upgrades_headline):
+    news = AnalystNews(upgrades_headline)
+    assert news.firm == "Morgan Stanley"
+    assert news.action == "Upgrades"
+    assert news.stock == "Tesla"
+    assert news.guidance == "Overweight"
+    assert news.price_target_action == "Raises"
+    assert news.price_target == 400.0
+
+
+def test_parse_downgrades_headline(downgrades_headline):
+    news = AnalystNews(downgrades_headline)
+    assert news.firm == "JPMorgan"
+    assert news.action == "Downgrades"
+    assert news.stock == "Amazon"
+    assert news.guidance == "Neutral"
+    assert news.price_target_action == "Lowers"
+    assert news.price_target == 135.0
+
+
+def test_parse_initiates_headline(initiates_headline):
+    news = AnalystNews(initiates_headline)
+    assert news.firm == "Piper Sandler"
+    assert news.action == "Initiates Coverage"
+    assert news.stock == "Nvidia"
+    assert news.guidance == "Overweight"
+    assert news.price_target_action == "Announces"
+    assert news.price_target == 850.0
+
+
+def test_strip_rating_suffix():
+    headline = "UBS Downgrades Microsoft to Neutral Rating, Lowers Price Target to $275"
+    news = AnalystNews(headline)
+    assert news.guidance == "Neutral"
+    assert not news.guidance.endswith("Rating")
+
+
+def test_extract_value():
+    news = AnalystNews("Fake headline with $123.45")
+    result = news.extract_value(r"\$([\d\.]+)")
+    assert result == "123.45"
+
+    result = news.extract_value(r"nonexistent pattern")
+    assert result == ""
+
+
+def test_assign_groups():
+    news = AnalystNews("Doesn't matter")
+    values = ("Value1", "Value2", "Value3")
+    attributes = ["firm", "action", "guidance"]
+    news.assign_groups(values, attributes)
+
+    assert news.firm == "Value1"
+    assert news.action == "Value2"
+    assert news.guidance == "Value3"

@@ -26,8 +26,9 @@ def check_redis() -> None:
     try:
         REDIS_CONN.ping()
         logger.info("Redis is reachable")
-    except Exception:
+    except Exception as e:
         logger.exception("Redis connection error")
+        raise Exception(str(e))
 
 
 def article_in_cache(symbols: list, headline: str) -> bool:

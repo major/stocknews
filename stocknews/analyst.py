@@ -65,7 +65,11 @@ class AnalystNews:
 
     def parse_price_target(self) -> None:
         """Parse the price target change from the second half of the headline."""
-        self.price_target = float(self.extract_value(r"\$([\d\.]+)"))
+        try:
+            self.price_target = float(self.extract_value(r"\$([\d\.]+)"))
+        except ValueError:
+            self.price_target = 0.0
+
         self.price_target_action = self.extract_value(
             r", (Lowers|Maintains|Raises|Announces)"
         )
