@@ -129,5 +129,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sentry_sdk.init(dsn=settings.sentry_dsn, send_default_pii=True)
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        send_default_pii=True,
+        traces_sample_rate=0.25,
+        profile_session_sample_rate=0.25,
+        profile_lifecycle="trace",
+    )
     main()
