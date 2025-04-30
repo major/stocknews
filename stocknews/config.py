@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     discord_analyst_webhook: str = ""
     discord_earnings_webhook: str = ""
+    discord_news_webhook: str = ""
 
     mastodon_server_url: str = ""
     mastodon_server_token: str = ""

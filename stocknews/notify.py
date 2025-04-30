@@ -1,5 +1,6 @@
 """Send Discord notifications on stock news."""
 
+import html
 import logging
 
 import structlog
@@ -112,6 +113,30 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
         title=f"{emoji} {symbol}: {report.stock} {price_target}",
         description=headline,
         color=notification_color,
+    )
+    embed.set_image(url=settings.transparent_png)
+    embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
+
+    webhook.add_embed(embed)
+
+    webhook.execute()
+
+
+def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
+    """Send other news to a Discord webhook."""
+    symbol = symbols[0]
+
+    source = news_item.get("source", "")
+    summary = html.unescape(news_item.get("summary", ""))
+
+    webhook = DiscordWebhook(
+        url=settings.discord_news_webhook,
+        rate_limit_retry=True,
+    )
+    embed = DiscordEmbed(
+        title=f"{symbol}: {headline} (via {source})",
+        description=summary,
+        url=news_item.get("url", ""),
     )
     embed.set_image(url=settings.transparent_png)
     embed.set_thumbnail(url=settings.stock_logo % symbol.lower())

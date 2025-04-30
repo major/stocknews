@@ -72,24 +72,24 @@ def handle_message(news_item: dict) -> None:
     # Unescape the headline to make it readable.
     headline = html.unescape(news_item.get("headline", ""))
 
+    if utils.article_in_cache(symbols, headline):
+        return None
+
     # Take a new earnings report we haven't seen before and process it.
-    if utils.is_earnings_news(symbols, headline) and not utils.article_in_cache(
-        symbols, headline
-    ):
+    if utils.is_earnings_news(symbols, headline):
         logger.info(f"💸 Earnings news for {symbols[0]}: {headline}")
         notify.send_earnings_to_discord(symbols, headline)
         notify.send_earnings_to_mastodon(symbols, headline)
         return None
 
     # Take a new analyst report we haven't seen before and process it.
-    if utils.is_analyst_rating_change(headline) and not utils.article_in_cache(
-        symbols, headline
-    ):
+    if utils.is_analyst_rating_change(headline):
         logger.info(f"📈 Analyst rating change for {symbols[0]}: {headline}")
         notify.send_rating_change_to_discord(symbols, headline)
         return None
 
     logger.warning(f"❓ Unknown type: {symbols[0]} {headline}")
+    notify.send_news_to_discord(symbols, headline, news_item)
 
 
 def main() -> None:

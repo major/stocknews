@@ -69,7 +69,7 @@ def is_earnings_news(symbols: list, headline: str) -> bool:
     if len(symbols) != 1:
         return False
 
-    # https://regex101.com/r/v0kOmQ/1
+    # https://regex101.com/r/v0kOmQ/
     regex = r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[K|M|B]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[K|M|B]*)"
     matches = re.search(regex, headline)
     return matches is not None
@@ -77,7 +77,7 @@ def is_earnings_news(symbols: list, headline: str) -> bool:
 
 def extract_earnings_data(headline: str) -> dict:
     """Extract earnings data from a headline."""
-    # Regex101: https://regex101.com/r/gzWfqo/1
+    # Regex101: https://regex101.com/r/gzWfqo/
     regex = r"(EPS|Sales) ([\d\.()$KMBT]+) (\w*) ([\d\.()$KMBT]+) Est(?:imate|\.)"
     matches = re.findall(regex, headline, re.IGNORECASE)
 
