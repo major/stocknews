@@ -9,8 +9,8 @@ from httpx_ws import WebSocketSession, connect_ws
 from stocknews import notify, utils
 from stocknews.config import settings
 
-logging.basicConfig(level=logging.DEBUG)
-structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
+logging.basicConfig(level=logging.INFO)
+structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
 logger = structlog.get_logger()
 
 
@@ -23,7 +23,6 @@ def stream_news() -> None:
 
         while True:
             message = ws.receive_json()
-            logger.info(message)
             for item in message:
                 handle_message(item)
 
@@ -85,7 +84,7 @@ def handle_message(news_item: dict) -> None:
         )
         return None
 
-    logger.info(f"🤷‍♂️ Unknown type: {symbols[0]} {news_item['headline']}")
+    logger.warning(f"❓ Unknown type: {symbols[0]} {news_item['headline']}")
 
 
 def main() -> None:
