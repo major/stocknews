@@ -26,6 +26,7 @@ def stream_news() -> None:
         while True:
             message = ws.receive_json()
             for item in message:
+                logger.info(item)
                 handle_message(item)
 
 
