@@ -6,6 +6,7 @@ import logging
 import sentry_sdk
 import structlog
 from httpx_ws import WebSocketSession, connect_ws
+from rich import print
 
 from stocknews import notify, utils
 from stocknews.config import settings
@@ -103,6 +104,7 @@ def main() -> None:
         profile_lifecycle="trace",
     )
     stream_news()
+    print(settings)
 
 
 if __name__ == "__main__":
