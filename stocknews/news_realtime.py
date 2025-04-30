@@ -1,5 +1,6 @@
 """Implement real time news feed. 🚀"""
 
+import html
 import logging
 
 import sentry_sdk
@@ -68,14 +69,16 @@ def handle_message(news_item: dict) -> None:
     if len(symbols) != 1:
         return None
 
-    headline = news_item.get("headline", "")
+    # Unescape the headline to make it readable.
+    headline = html.unescape(news_item.get("headline", ""))
+
     # Take a new earnings report we haven't seen before and process it.
     if utils.is_earnings_news(symbols, headline) and not utils.article_in_cache(
         symbols, headline
     ):
         logger.info(f"💸 Earnings news for {symbols[0]}: {headline}")
-        notify.send_earnings_to_discord(news_item["symbols"], news_item["headline"])
-        notify.send_earnings_to_mastodon(news_item["symbols"], news_item["headline"])
+        notify.send_earnings_to_discord(symbols, headline)
+        notify.send_earnings_to_mastodon(symbols, headline)
         return None
 
     # Take a new analyst report we haven't seen before and process it.
@@ -83,12 +86,10 @@ def handle_message(news_item: dict) -> None:
         symbols, headline
     ):
         logger.info(f"📈 Analyst rating change for {symbols[0]}: {headline}")
-        notify.send_rating_change_to_discord(
-            news_item["symbols"], news_item["headline"]
-        )
+        notify.send_rating_change_to_discord(symbols, headline)
         return None
 
-    logger.warning(f"❓ Unknown type: {symbols[0]} {news_item['headline']}")
+    logger.warning(f"❓ Unknown type: {symbols[0]} {headline}")
 
 
 def main() -> None:

@@ -1,6 +1,5 @@
 """Send Discord notifications on stock news."""
 
-import html
 import logging
 
 import structlog
@@ -31,7 +30,6 @@ def get_username(symbols: list) -> str:
 def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
     """Send an earnings report to a Mastodon account."""
     symbol = symbols[0]
-    headline = html.unescape(headline)
     company_name = get_company_name(headline)
     description = get_earnings_notification_description(headline)
 
@@ -52,7 +50,6 @@ def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
 def send_earnings_to_discord(symbols: list, headline: str) -> None:
     """Send an earnings report to a Discord webhook."""
     symbol = symbols[0]
-    headline = html.unescape(headline)
     company_name = get_company_name(headline)
     description = get_earnings_notification_description(headline)
 
@@ -113,7 +110,7 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
     )
     embed = DiscordEmbed(
         title=f"{emoji} {symbol}: {report.stock} {price_target}",
-        description=html.unescape(headline),
+        description=headline,
         color=notification_color,
     )
     embed.set_image(url=settings.transparent_png)
