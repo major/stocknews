@@ -97,8 +97,8 @@ def main() -> None:
         dsn=settings.sentry_dsn,
         debug=settings.sentry_debug,
         send_default_pii=True,
-        traces_sample_rate=0.25,
-        profile_session_sample_rate=0.25,
+        traces_sample_rate=1.0,
+        profile_session_sample_rate=1.0,
         profile_lifecycle="trace",
     )
     stream_news()
