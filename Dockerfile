@@ -15,4 +15,4 @@ COPY ./run_bot.py ./run_bot.py
 
 RUN poetry install
 
-CMD ["./run_bot.py"]
+CMD ["/app/.venv/bin/python", "run_bot.py"]
