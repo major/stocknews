@@ -1,6 +1,5 @@
 """Send Discord notifications on stock news."""
 
-import html
 import logging
 
 import structlog
@@ -127,7 +126,7 @@ def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
     symbol = symbols[0]
 
     author = news_item.get("author", "")
-    summary = html.unescape(news_item.get("summary", ""))
+    summary = news_item.get("summary", "")
 
     webhook = DiscordWebhook(
         url=settings.discord_news_webhook,
