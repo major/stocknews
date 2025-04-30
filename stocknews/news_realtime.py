@@ -37,11 +37,13 @@ def authenticate(ws: WebSocketSession) -> None:
     ws.send_json(auth_json)
 
     message = ws.receive_json()
-    logger.info(message)
+    logger.debug(message)
 
     if message[0].get("T") != "success":
         logger.error("Authentication failed")
         raise Exception("Authentication failed")
+    else:
+        logger.info("🟢 Authenticated successfully")
 
 
 def subscribe(ws: WebSocketSession) -> None:
@@ -50,11 +52,13 @@ def subscribe(ws: WebSocketSession) -> None:
     ws.send_json(subscribe_msg)
 
     message = ws.receive_json()
-    logger.info(message)
+    logger.debug(message)
 
     if message[0].get("T") != "success":
         logger.error("Subscription failed")
         raise Exception("Subscription failed")
+    else:
+        logger.info("🟢 Subscribed to news successfully")
 
 
 def handle_message(news_item: dict) -> None:
