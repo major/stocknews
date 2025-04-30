@@ -134,13 +134,12 @@ def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
         rate_limit_retry=True,
     )
     embed = DiscordEmbed(
-        title=f"{symbol}: {headline}",
-        description=summary,
+        title=f"{symbol} via {author}",
+        description=f"**{headline}**\n{summary}",
         url=news_item.get("url", ""),
     )
     embed.set_image(url=settings.transparent_png)
     embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
-    embed.set_footer(text=author)
 
     webhook.add_embed(embed)
 
