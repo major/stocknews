@@ -43,7 +43,7 @@ def article_in_cache(symbols: list, headline: str) -> bool:
     else:
         logger.debug(f"Article '{article_string}' not in cache -- adding it.")
         # Expire the cache record after a while to avoid consuming too much memory.
-        REDIS_CONN.set(article_key, article_string, ex=3600)
+        REDIS_CONN.set(article_key, article_string)
 
     return False
 
