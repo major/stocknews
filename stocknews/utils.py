@@ -48,6 +48,13 @@ def article_in_cache(symbols: list, headline: str) -> bool:
     return False
 
 
+def dump_article_cache() -> str:
+    """Dump the cache."""
+    keys = list(REDIS_CONN.keys())  # type: ignore[arg-type]
+    articles = set([REDIS_CONN.get(x) for x in keys])
+    return "\n".join(sorted(articles))  # type: ignore[arg-type]
+
+
 def get_cache_expiration(symbols: list, headline: str) -> Optional[int]:
     """Get the expiration time for the cache."""
     if is_earnings_news(symbols, headline):
