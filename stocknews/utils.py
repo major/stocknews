@@ -67,6 +67,12 @@ def is_earnings_news(symbols: list, headline: str) -> bool:
     """Check if a headline is earnings related."""
     # Earnings headlines have only one symbol.
     if len(symbols) != 1:
+        logger.info(f"Too many symbols: '{headline}'")
+        return False
+
+    # Ignore lines that are missing an estimate.
+    if any(x in headline.lower() for x in ["up from", "down from"]):
+        logger.info(f"Missing estimate in headline: '{headline}'")
         return False
 
     # https://regex101.com/r/v0kOmQ/

@@ -26,7 +26,6 @@ def stream_news() -> None:
         while True:
             message = ws.receive_json()
             for item in message:
-                logger.info(item)
                 handle_message(item)
 
 
@@ -71,8 +70,16 @@ def handle_message(news_item: dict) -> None:
     if len(symbols) != 1:
         return None
 
+    # Ignore stocks from non-US exchanges.
+    if ":" in symbols[0]:
+        logger.info(f"❌ Ignoring non-US exchange: {symbols[0]}")
+        return None
+
     # Unescape the headline to make it readable.
     headline = html.unescape(news_item.get("headline", ""))
+
+    # Log the news item for now.
+    logger.info(news_item)
 
     if utils.article_in_cache(symbols, headline):
         return None
