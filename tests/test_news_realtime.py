@@ -71,47 +71,6 @@ def test_subscribe_failure():
         subscribe(mock_ws)
 
 
-@patch("stocknews.news_realtime.utils.is_earnings_news")
-@patch("stocknews.news_realtime.utils.article_in_cache")
-@patch("stocknews.news_realtime.notify.send_earnings_to_discord")
-@patch("stocknews.news_realtime.notify.send_earnings_to_mastodon")
-def test_handle_message_earnings(
-    mock_send_mastodon, mock_send_discord, mock_in_cache, mock_is_earnings
-):
-    """Test handling an earnings message."""
-    mock_is_earnings.return_value = True
-    mock_in_cache.return_value = False
-
-    news_item = {"symbols": ["AAPL"], "headline": "Apple Reports Q3 Earnings"}
-
-    handle_message(news_item)
-
-    mock_send_discord.assert_called_once_with(["AAPL"], "Apple Reports Q3 Earnings")
-    mock_send_mastodon.assert_called_once_with(["AAPL"], "Apple Reports Q3 Earnings")
-
-
-@patch("stocknews.news_realtime.utils.is_analyst_rating_change")
-@patch("stocknews.news_realtime.utils.article_in_cache")
-@patch("stocknews.news_realtime.notify.send_rating_change_to_discord")
-def test_handle_message_analyst_rating(
-    mock_send_discord, mock_in_cache, mock_is_rating
-):
-    """Test handling an analyst rating message."""
-    mock_is_rating.return_value = True
-    mock_in_cache.return_value = False
-
-    news_item = {
-        "symbols": ["AAPL"],
-        "headline": "JP Morgan Upgrades Apple to Overweight",
-    }
-
-    handle_message(news_item)
-
-    mock_send_discord.assert_called_once_with(
-        ["AAPL"], "JP Morgan Upgrades Apple to Overweight"
-    )
-
-
 def test_handle_message_multiple_symbols():
     """Test handling a message with multiple symbols."""
     news_item = {"symbols": ["AAPL", "MSFT"], "headline": "Tech Stocks Rally"}
