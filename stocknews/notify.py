@@ -125,7 +125,6 @@ def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
     """Send other news to a Discord webhook."""
     symbol = symbols[0]
 
-    source = news_item.get("source", "")
     summary = news_item.get("summary", "")
 
     webhook = DiscordWebhook(
@@ -133,8 +132,8 @@ def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
         rate_limit_retry=True,
     )
     embed = DiscordEmbed(
-        title=f"{symbol} via {source}",
-        description=f"**{headline}**\n{summary}",
+        title=f"{symbol}: {headline}",
+        description=f"{summary}",
         url=news_item.get("url", ""),
     )
     embed.set_image(url=settings.transparent_png)
