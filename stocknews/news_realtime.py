@@ -75,6 +75,12 @@ def handle_message(news_item: dict) -> None:
         logger.info(f"❌ Ignoring non-US exchange: {symbols[0]}")
         return None
 
+    # Ignore anything except approved authors.
+    allowed_authors = ["Benzinga Newsdesk"]
+    if news_item.get("author") not in allowed_authors:
+        logger.info(f"❌ Ignoring non-approved author: {news_item.get('author')}")
+        return None
+
     # Unescape the headline to make it readable.
     headline = html.unescape(news_item.get("headline", ""))
 
