@@ -50,9 +50,9 @@ def article_in_cache(symbols: list, headline: str) -> bool:
 
 def dump_article_cache() -> str:
     """Dump the cache."""
-    keys = list(REDIS_CONN.keys())  # type: ignore[arg-type]
+    keys = list(REDIS_CONN.keys())
     articles = set([REDIS_CONN.get(x) for x in keys])
-    return "\n".join(sorted(articles))  # type: ignore[arg-type]
+    return "\n".join(sorted(articles))
 
 
 def get_cache_expiration(symbols: list, headline: str) -> Optional[int]:
