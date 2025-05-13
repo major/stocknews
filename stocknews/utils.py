@@ -1,10 +1,13 @@
 """Utilities for quick actions on things."""
 
+import json
 import logging
 import re
 from hashlib import sha256
+from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 import structlog
 from redis import Redis
 
@@ -143,3 +146,27 @@ def has_blocked_phrases(headline: str) -> bool:
 def is_analyst_rating_change(headline: str) -> bool:
     """Check if the headline is an analyst rating change."""
     return "price target" in headline.lower()
+
+
+def get_stocks_from_wikipedia(url: str = "") -> list[str]:
+    """Get the stocks from a Wikipedia page."""
+    tables = pd.read_html(url)
+    return list(tables[0]["Symbol"].astype(str).tolist())
+
+
+def update_sp1500_stocks() -> None:
+    """Get the stocks from the S&P 500 Wikipedia page."""
+    stocks = []
+    for url in [
+        "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+        "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
+        "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies",
+    ]:
+        stocks += get_stocks_from_wikipedia(url)
+
+    # Remove warrants.
+    stocks = [x for x in stocks if "." not in x]
+
+    stocks = sorted(set(stocks))
+
+    Path(settings.sp1500_stocks_file).write_text(json.dumps(stocks, indent=2))
