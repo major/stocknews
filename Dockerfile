@@ -9,7 +9,7 @@ ENV POETRY_NO_INTERACTION=1 \
 RUN pip install -U pip poetry
 
 WORKDIR /app
-COPY ./pyproject.toml ./poetry.lock* README.md ./
+COPY ./pyproject.toml ./poetry.lock* README.md sp1500_stocks.json ./
 COPY ./stocknews ./stocknews
 COPY ./run_bot.py ./run_bot.py
 
