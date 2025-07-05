@@ -1,5 +1,5 @@
 # From https://fastapi.tiangolo.com/deployment/docker/#docker-image-with-poetry
-FROM docker.io/library/python:3.13@sha256:5f69d22a88dd4cc4ee1576def19aef48c8faa1b566054c44291183831cbad13b
+FROM docker.io/library/python:3.13@sha256:a6af772cf98267c48c145928cbeb35bd8e89b610acd70f93e3e8ac3e96c92af8
 
 ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
