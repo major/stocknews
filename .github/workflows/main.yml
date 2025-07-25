@@ -12,7 +12,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  tox:
+  testing:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -38,7 +38,7 @@ jobs:
 
   container:
     needs:
-      - tox
+      - testing
     runs-on: ubuntu-latest
     permissions:
       contents: read

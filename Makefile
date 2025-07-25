@@ -7,6 +7,6 @@ lint:
 	uv run ruff format --check
 
 typecheck:
-	uv run pyright src/codex
+	uv run pyright src/*
 
 all: lint test typecheck
