@@ -23,7 +23,7 @@ ALLOWED_STOCKS = json.loads(Path(settings.sp1500_stocks_file).read_text())
 def stream_news() -> None:
     """Connect to the Alpaca WebSocket API and stream news."""
     ws_url = settings.alpaca_news_stream_url
-    with connect_ws(ws_url) as ws:  # type: WebSocketSession
+    with connect_ws(ws_url) as ws:
         authenticate(ws)
         subscribe(ws)
 
