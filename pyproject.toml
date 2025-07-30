@@ -32,7 +32,6 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "pytest-randomly>=3.16.0",
-    "pytest-sugar>=1.0.0",
     "ruff>=0.12.5",
 ]
 
