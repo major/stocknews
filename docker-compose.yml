@@ -10,5 +10,5 @@ services:
 
   redis:
     container_name: redis
-    image: docker.io/library/redis:alpine@sha256:25c0ae32c6c2301798579f5944af53729766a18eff5660bbef196fc2e6214a9c
+    image: docker.io/library/redis:alpine@sha256:a0fc425a443bb583175bc380874f1cbfa55ccfeb0b1d690adf50b1e6d4e79513
     restart: unless-stopped
