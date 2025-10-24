@@ -4,5 +4,11 @@
     "platformAutomerge": true,
     "git-submodules": {
         "enabled": true
-    }
+    },
+    "packageRules": [
+        {
+            "matchManagers": ["github-actions"],
+            "automerge": true
+        }
+    ]
 }

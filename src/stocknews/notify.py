@@ -48,7 +48,7 @@ def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
 
 
 def send_earnings_to_discord(symbols: list, headline: str) -> None:
-    """Send an earnings report to a Discord webhook."""
+    """Send an earnings report to Discord webhook(s)."""
     symbol = symbols[0]
     company_name = get_company_name(headline)
     description = get_earnings_notification_description(headline)
@@ -57,25 +57,45 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
         logger.warning("No earnings description found for %s", headline)
         return
 
-    webhook = DiscordWebhook(
-        url=settings.discord_earnings_webhook,
-        rate_limit_retry=True,
-    )
-    embed = DiscordEmbed(
-        title=f"{symbol}: {company_name}",
-        description=description,
-    )
-    embed.set_image(url=settings.transparent_png)
-    embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
-    # embed.set_footer(text=f"Raw news: {headline}")
+    # 📢 Get all configured earnings webhooks
+    webhook_urls = settings.get_discord_earnings_webhooks()
+    if not webhook_urls:
+        logger.debug("No earnings webhooks configured, skipping Discord notification")
+        return
 
-    webhook.add_embed(embed)
+    # 🔄 Send to each configured webhook
+    for webhook_url in webhook_urls:
+        try:
+            webhook = DiscordWebhook(
+                url=webhook_url,
+                rate_limit_retry=True,
+            )
+            embed = DiscordEmbed(
+                title=f"{symbol}: {company_name}",
+                description=description,
+            )
+            embed.set_image(url=settings.transparent_png)
+            embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
+            # embed.set_footer(text=f"Raw news: {headline}")
 
-    webhook.execute()
+            webhook.add_embed(embed)
+            webhook.execute()
+            logger.debug(
+                "Earnings notification sent",
+                symbol=symbol,
+                webhook_url=webhook_url[:50] + "...",
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to send earnings notification",
+                symbol=symbol,
+                webhook_url=webhook_url[:50] + "...",
+                error=str(e),
+            )
 
 
 def send_rating_change_to_discord(symbols: list, headline: str) -> None:
-    """Send an analyst ratings change to a Discord webhook"""
+    """Send an analyst ratings change to Discord webhook(s)"""
     symbol = symbols[0]
 
     # Sorry, Canada. 🇨🇦
@@ -105,40 +125,78 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
 
     price_target = f"${report.price_target:.2f}"
 
-    webhook = DiscordWebhook(
-        url=settings.discord_analyst_webhook, rate_limit_retry=True
-    )
-    embed = DiscordEmbed(
-        title=f"{emoji} {symbol}: {report.stock} {price_target}",
-        description=headline,
-        color=notification_color,
-    )
-    embed.set_image(url=settings.transparent_png)
-    embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
+    # 📢 Get all configured analyst webhooks
+    webhook_urls = settings.get_discord_analyst_webhooks()
+    if not webhook_urls:
+        logger.debug("No analyst webhooks configured, skipping Discord notification")
+        return None
 
-    webhook.add_embed(embed)
+    # 🔄 Send to each configured webhook
+    for webhook_url in webhook_urls:
+        try:
+            webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
+            embed = DiscordEmbed(
+                title=f"{emoji} {symbol}: {report.stock} {price_target}",
+                description=headline,
+                color=notification_color,
+            )
+            embed.set_image(url=settings.transparent_png)
+            embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
 
-    webhook.execute()
+            webhook.add_embed(embed)
+            webhook.execute()
+            logger.debug(
+                "Analyst rating notification sent",
+                symbol=symbol,
+                webhook_url=webhook_url[:50] + "...",
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to send analyst rating notification",
+                symbol=symbol,
+                webhook_url=webhook_url[:50] + "...",
+                error=str(e),
+            )
 
 
 def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
-    """Send other news to a Discord webhook."""
+    """Send other news to Discord webhook(s)."""
     symbol = symbols[0]
 
     summary = news_item.get("summary", "")
 
-    webhook = DiscordWebhook(
-        url=settings.discord_news_webhook,
-        rate_limit_retry=True,
-    )
-    embed = DiscordEmbed(
-        title=f"{symbol}: {headline}",
-        description=f"{summary}",
-        url=news_item.get("url", ""),
-    )
-    embed.set_image(url=settings.transparent_png)
-    embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
+    # 📢 Get all configured news webhooks
+    webhook_urls = settings.get_discord_news_webhooks()
+    if not webhook_urls:
+        logger.debug("No news webhooks configured, skipping Discord notification")
+        return
 
-    webhook.add_embed(embed)
+    # 🔄 Send to each configured webhook
+    for webhook_url in webhook_urls:
+        try:
+            webhook = DiscordWebhook(
+                url=webhook_url,
+                rate_limit_retry=True,
+            )
+            embed = DiscordEmbed(
+                title=f"{symbol}: {headline}",
+                description=f"{summary}",
+                url=news_item.get("url", ""),
+            )
+            embed.set_image(url=settings.transparent_png)
+            embed.set_thumbnail(url=settings.stock_logo % symbol.lower())
 
-    webhook.execute()
+            webhook.add_embed(embed)
+            webhook.execute()
+            logger.debug(
+                "News notification sent",
+                symbol=symbol,
+                webhook_url=webhook_url[:50] + "...",
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to send news notification",
+                symbol=symbol,
+                webhook_url=webhook_url[:50] + "...",
+                error=str(e),
+            )
