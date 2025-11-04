@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Python application that streams real-time stock news from Alpaca Markets WebSocket API and sends filtered notifications to Discord and Mastodon. The bot focuses on S&P 1500 companies and filters for earnings reports and analyst rating changes from approved sources like Benzinga Newsdesk.
+This is a Python application that streams real-time stock news from Alpaca Markets WebSocket API and sends filtered notifications to Discord and Mastodon. The bot filters for earnings reports and analyst rating changes from approved sources like Benzinga Newsdesk.
 
 ## Development Commands
 
@@ -43,7 +43,6 @@ This is a Python application that streams real-time stock news from Alpaca Marke
 **utils.py** - Utility functions for:
 - Redis caching to prevent duplicate notifications
 - Earnings data parsing using regex patterns
-- S&P 1500 stock list management from Wikipedia sources
 - Company name extraction and data validation
 
 **analyst.py** - Analyst rating parser that extracts structured data from headlines:
@@ -57,7 +56,7 @@ This is a Python application that streams real-time stock news from Alpaca Marke
 
 ### Data Flow
 1. WebSocket receives news from Alpaca API
-2. Messages filtered by symbol count, exchange, author, and S&P 1500 membership
+2. Messages filtered by symbol count, exchange, and author
 3. Redis cache prevents duplicate processing
 4. News categorized as earnings, analyst ratings, or general news
 5. Formatted notifications sent to Discord/Mastodon with stock logos and structured data
@@ -78,5 +77,4 @@ This is a Python application that streams real-time stock news from Alpaca Marke
 ### Configuration
 - Environment-based settings via Pydantic
 - Requires .env file with API keys and webhook URLs
-- S&P 1500 stock list stored in sp1500_stocks.json
 - Sentry integration for error monitoring

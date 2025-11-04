@@ -34,8 +34,6 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     sentry_debug: bool = False
 
-    sp1500_stocks_file: str = "sp1500_stocks.json"
-
     def get_discord_analyst_webhooks(self) -> list[str]:
         """
         📋 Get list of Discord analyst webhook URLs from configuration.

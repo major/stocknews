@@ -1,9 +1,7 @@
 """Implement real time news feed. 🚀"""
 
 import html
-import json
 import logging
-from pathlib import Path
 
 import sentry_sdk
 import structlog
@@ -16,8 +14,6 @@ from stocknews.config import settings
 logging.basicConfig(level=logging.INFO)
 structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
 logger = structlog.get_logger()
-
-ALLOWED_STOCKS = json.loads(Path(settings.sp1500_stocks_file).read_text())
 
 
 def stream_news() -> None:
@@ -87,10 +83,6 @@ def handle_message(news_item: dict) -> None:
 
     # Unescape the headline to make it readable.
     headline = html.unescape(news_item.get("headline", ""))
-
-    if symbols[0] not in ALLOWED_STOCKS:
-        logger.info(f"❌ Ignoring non-approved stock: {symbols[0]}")
-        return None
 
     # Log the news item for now.
     logger.info(news_item)
