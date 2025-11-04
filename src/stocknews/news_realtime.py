@@ -87,10 +87,7 @@ def handle_message(news_item: dict) -> None:
     # Log the news item for now.
     logger.info(news_item)
 
-    if utils.article_in_cache(symbols, headline):
-        return None
-
-    # Take a new earnings report we haven't seen before and process it.
+    # Take a new earnings report and process it.
     if utils.is_earnings_news(symbols, headline):
         logger.info(f"💸 Earnings news for {symbols[0]}: {headline}")
         notify.send_earnings_to_discord(symbols, headline)

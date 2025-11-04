@@ -11,9 +11,6 @@ class Settings(BaseSettings):
     alpaca_api_secret: str = ""
     alpaca_news_stream_url: str = "wss://stream.data.alpaca.markets/v1beta1/news"
 
-    redis_host: str = "localhost"
-    redis_port: int = 6379
-
     # 📢 Discord webhooks - supports multiple webhooks per channel type
     discord_analyst_webhook: str = ""  # Legacy single webhook (deprecated)
     discord_analyst_webhooks: str = ""  # Comma-separated webhook URLs

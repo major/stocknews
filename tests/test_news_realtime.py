@@ -81,9 +81,8 @@ def test_handle_message_multiple_symbols():
 
 
 @patch("stocknews.news_realtime.utils.is_earnings_news")
-@patch("stocknews.news_realtime.utils.article_in_cache")
 @patch("stocknews.news_realtime.utils.is_analyst_rating_change")
-def test_handle_message_unknown_type(mock_is_rating, mock_in_cache, mock_is_earnings):
+def test_handle_message_unknown_type(mock_is_rating, mock_is_earnings):
     """Test handling an unknown message type."""
     mock_is_earnings.return_value = False
     mock_is_rating.return_value = False

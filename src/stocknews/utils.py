@@ -2,11 +2,9 @@
 
 import logging
 import re
-from hashlib import sha256
 from typing import Optional
 
 import structlog
-from redis import Redis
 
 from stocknews.config import settings
 
@@ -15,52 +13,6 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
-
-REDIS_CONN = Redis(
-    host=settings.redis_host, port=settings.redis_port, decode_responses=True
-)
-
-
-def check_redis() -> None:
-    """Check if Redis is reachable."""
-    try:
-        REDIS_CONN.ping()
-        logger.info("Redis is reachable")
-    except Exception as e:
-        logger.exception("Redis connection error")
-        raise Exception(str(e))
-
-
-def article_in_cache(symbols: list, headline: str) -> bool:
-    """Check if the article is already in the cache."""
-    article_string = f"{','.join(symbols)}: {headline}"
-    article_key = sha256(article_string.encode()).hexdigest()
-
-    if REDIS_CONN.exists(article_key):
-        logger.debug(f"Article '{article_string}' already in cache.")
-        return True
-
-    else:
-        logger.debug(f"Article '{article_string}' not in cache -- adding it.")
-        # Expire the cache record after a while to avoid consuming too much memory.
-        REDIS_CONN.set(article_key, article_string)
-
-    return False
-
-
-def dump_article_cache() -> str:
-    """Dump the cache."""
-    keys = list(REDIS_CONN.keys())  # type: ignore
-    articles = set([REDIS_CONN.get(x) for x in keys])
-    return "\n".join(sorted(articles))  # type: ignore
-
-
-def get_cache_expiration(symbols: list, headline: str) -> Optional[int]:
-    """Get the expiration time for the cache."""
-    if is_earnings_news(symbols, headline):
-        return None
-
-    return 3600
 
 
 def is_earnings_news(symbols: list, headline: str) -> bool:
