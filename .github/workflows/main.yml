@@ -91,7 +91,8 @@ jobs:
         run: |
           cd selfhosted
           DIGEST="${{ steps.build.outputs.digest }}"
-          sed -i "s|ghcr.io/major/stocknews:latest@sha256:[a-f0-9]*|ghcr.io/major/stocknews:latest@${DIGEST}|g" apps/base/stocknews/deployment.yaml
+          # Update the digest in deployment.yaml (format: ghcr.io/major/stocknews@sha256:...)
+          sed -i -E "s|ghcr.io/major/stocknews@sha256:[a-f0-9]{64}|ghcr.io/major/stocknews@${DIGEST}|g" apps/base/stocknews/deployment.yaml
 
           if git diff --quiet apps/base/stocknews/deployment.yaml; then
             echo "No changes to deployment.yaml, skipping commit"
