@@ -27,7 +27,7 @@ jobs:
         uses: astral-sh/setup-uv@5a7eac68fb9809dea845d802897dc5c723910fa3 # v7
         with:
           # Install a specific version of uv.
-          version: "0.9.8"
+          version: "0.9.9"
           enable-cache: true
 
       - name: Install the project
