@@ -21,9 +21,6 @@ class Settings(BaseSettings):
     discord_news_webhook: str = ""  # Legacy single webhook (deprecated)
     discord_news_webhooks: str = ""  # Comma-separated webhook URLs
 
-    mastodon_server_url: str = ""
-    mastodon_server_token: str = ""
-
     stock_logo: str = "https://static.stocktitan.net/company-logo/%s.webp"
     transparent_png: str = "https://major.io/transparent.png"
     blocked_phrases: list = ["if you invested", "you would have", "would be worth"]

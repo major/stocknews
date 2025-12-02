@@ -91,7 +91,6 @@ def handle_message(news_item: dict) -> None:
     if utils.is_earnings_news(symbols, headline):
         logger.info(f"💸 Earnings news for {symbols[0]}: {headline}")
         notify.send_earnings_to_discord(symbols, headline)
-        notify.send_earnings_to_mastodon(symbols, headline)
         return None
 
     # Take a new analyst report we haven't seen before and process it.

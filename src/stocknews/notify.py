@@ -4,7 +4,6 @@ import logging
 
 import structlog
 from discord_webhook import DiscordEmbed, DiscordWebhook
-from mastodon import Mastodon
 
 from stocknews.analyst import AnalystNews
 from stocknews.config import (
@@ -25,26 +24,6 @@ def get_username(symbols: list) -> str:
         return f"{', '.join(symbols)}"
 
     return "🗞️"
-
-
-def send_earnings_to_mastodon(symbols: list, headline: str) -> None:
-    """Send an earnings report to a Mastodon account."""
-    symbol = symbols[0]
-    company_name = get_company_name(headline)
-    description = get_earnings_notification_description(headline)
-
-    if not description:
-        logger.warning("No earnings description found for %s", headline)
-        return
-
-    mastodon = Mastodon(
-        access_token=settings.mastodon_server_token,
-        api_base_url=settings.mastodon_server_url,
-    )
-
-    mastodon.status_post(
-        f"{symbol}: {company_name}\n\n{description}\n\n#stocks #earnings #{symbol}"
-    )
 
 
 def send_earnings_to_discord(symbols: list, headline: str) -> None:
