@@ -1,21 +1,13 @@
 """Send Discord notifications on stock news."""
 
-import logging
-
-import structlog
 from discord_webhook import DiscordEmbed, DiscordWebhook
 
 from stocknews.analyst import AnalystNews
 from stocknews.config import (
     settings,
 )
+from stocknews.logging_config import logger
 from stocknews.utils import get_company_name, get_earnings_notification_description
-
-structlog.configure(
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-)
-
-logger = structlog.get_logger()
 
 
 def get_username(symbols: list) -> str:
@@ -33,7 +25,7 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
     description = get_earnings_notification_description(headline)
 
     if not description:
-        logger.warning("No earnings description found for %s", headline)
+        logger.warning(f"No earnings description found for {headline}")
         return
 
     # 📢 Get all configured earnings webhooks
@@ -60,16 +52,11 @@ def send_earnings_to_discord(symbols: list, headline: str) -> None:
             webhook.add_embed(embed)
             webhook.execute()
             logger.debug(
-                "Earnings notification sent",
-                symbol=symbol,
-                webhook_url=webhook_url[:50] + "...",
+                f"Earnings notification sent: {symbol=} webhook_url={webhook_url[:50]}..."
             )
         except Exception as e:
             logger.error(
-                "Failed to send earnings notification",
-                symbol=symbol,
-                webhook_url=webhook_url[:50] + "...",
-                error=str(e),
+                f"Failed to send earnings notification: {symbol=} webhook_url={webhook_url[:50]}... {e=}"
             )
 
 
@@ -125,16 +112,11 @@ def send_rating_change_to_discord(symbols: list, headline: str) -> None:
             webhook.add_embed(embed)
             webhook.execute()
             logger.debug(
-                "Analyst rating notification sent",
-                symbol=symbol,
-                webhook_url=webhook_url[:50] + "...",
+                f"Analyst rating notification sent: {symbol=} webhook_url={webhook_url[:50]}..."
             )
         except Exception as e:
             logger.error(
-                "Failed to send analyst rating notification",
-                symbol=symbol,
-                webhook_url=webhook_url[:50] + "...",
-                error=str(e),
+                f"Failed to send analyst rating notification: {symbol=} webhook_url={webhook_url[:50]}... {e=}"
             )
 
 
@@ -168,14 +150,9 @@ def send_news_to_discord(symbols: list, headline: str, news_item: dict) -> None:
             webhook.add_embed(embed)
             webhook.execute()
             logger.debug(
-                "News notification sent",
-                symbol=symbol,
-                webhook_url=webhook_url[:50] + "...",
+                f"News notification sent: {symbol=} webhook_url={webhook_url[:50]}..."
             )
         except Exception as e:
             logger.error(
-                "Failed to send news notification",
-                symbol=symbol,
-                webhook_url=webhook_url[:50] + "...",
-                error=str(e),
+                f"Failed to send news notification: {symbol=} webhook_url={webhook_url[:50]}... {e=}"
             )

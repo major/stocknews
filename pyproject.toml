@@ -13,7 +13,7 @@ dependencies = [
     "pydantic-settings>=2.10.1",
     "rich>=14.1.0",
     "sentry-sdk[httpx]>=2.33.2",
-    "structlog>=25.4.0",
+    "loguru>=0.7.3",
 ]
 
 [build-system]

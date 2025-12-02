@@ -1,19 +1,14 @@
 """Implement real time news feed. 🚀"""
 
 import html
-import logging
 
 import sentry_sdk
-import structlog
 from httpx_ws import WebSocketSession, connect_ws
 from rich import print
 
 from stocknews import notify, utils
 from stocknews.config import settings
-
-logging.basicConfig(level=logging.INFO)
-structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
-logger = structlog.get_logger()
+from stocknews.logging_config import logger
 
 
 def stream_news() -> None:

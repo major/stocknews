@@ -1,18 +1,10 @@
 """Utilities for quick actions on things."""
 
-import logging
 import re
 from typing import Optional
 
-import structlog
-
 from stocknews.config import settings
-
-structlog.configure(
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-)
-
-logger = structlog.get_logger()
+from stocknews.logging_config import logger
 
 
 def is_earnings_news(symbols: list, headline: str) -> bool:
