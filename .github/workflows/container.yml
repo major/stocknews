@@ -1,80 +1,51 @@
-name: Main
+name: container
 
 on:
   push:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  contents: read
 
 jobs:
-  testing:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version-file: ".python-version"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          # Install a specific version of uv.
-          version: "0.11.17"
-          enable-cache: true
-
-      - name: Install the project
-        run: uv sync --locked --all-extras --dev
-
-      - name: Run all tests
-        run: make all
-
   container:
-    needs:
-      - testing
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
+          file: Containerfile
           platforms: linux/amd64
           push: ${{ github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            GIT_BRANCH=${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository }}:latest
 
       - name: Checkout selfhosted repository
         if: github.ref == 'refs/heads/main'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: major/selfhosted
           token: ${{ secrets.SELFHOSTED_PAT }}
@@ -91,7 +62,6 @@ jobs:
         run: |
           cd selfhosted
           DIGEST="${{ steps.build.outputs.digest }}"
-          # Update the digest in deployment.yaml (format: ghcr.io/major/stocknews@sha256:...)
           sed -i -E "s|ghcr.io/major/stocknews@sha256:[a-f0-9]{64}|ghcr.io/major/stocknews@${DIGEST}|g" apps/base/stocknews/deployment.yaml
 
           if git diff --quiet apps/base/stocknews/deployment.yaml; then
