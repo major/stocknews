@@ -25,5 +25,6 @@ Read only what you need:
 - Env vars only; Discord webhooks use plural comma-separated vars: `*_WEBHOOKS`.
 - Keep tests next to the module they cover.
 - Prefer simple structs/functions; add custom error types only when callers need to match errors.
+- Container builds use Hummingbird Rust images: `registry.access.redhat.com/hi/rust:1.96-builder` -> `registry.access.redhat.com/hi/rust:1.96`.
 - Keep action versions pinned to commit SHAs.
 - Do not reintroduce Python/uv tooling.
