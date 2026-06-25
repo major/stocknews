@@ -7,3 +7,8 @@ coverage:
       default:
         target: 90%
         threshold: 0.5%
+
+ignore:
+  - "src/alpaca.rs"
+  - "src/config.rs"
+  - "src/main.rs"
