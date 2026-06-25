@@ -3,7 +3,7 @@ services:
     container_name: stocknews
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Containerfile
     env_file:
-      - path: .env
+      - .env
     restart: unless-stopped
