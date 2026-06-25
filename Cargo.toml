@@ -8,5 +8,6 @@ description = "Alpaca stock news bot for Discord"
 repository = "https://github.com/major/stocknews"
 
 [dependencies]
+regex = "1"
 
 [dev-dependencies]
