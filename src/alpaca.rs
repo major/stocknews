@@ -46,7 +46,7 @@ pub async fn stream_news(settings: &Settings) -> AppResult<()> {
         let Message::Text(text) = message? else {
             continue;
         };
-        for item in news_items_from_frame(&text)? {
+        for item in news_items_from_frame(&text) {
             handle_message(&client, settings, item).await?;
         }
     }
@@ -65,20 +65,26 @@ where
     };
     let response: Vec<Value> = serde_json::from_str(&text)?;
     debug!(?response);
-    if response
+    let kind = response
         .first()
         .and_then(|item| item.get("T"))
-        .and_then(Value::as_str)
-        == Some("success")
-    {
-        Ok(())
-    } else {
-        Err(format!("{action} failed").into())
+        .and_then(Value::as_str);
+    match (action, kind) {
+        ("subscription", Some("subscription"))
+        | ("authentication", Some("authenticated"))
+        | (_, Some("success")) => Ok(()),
+        _ => Err(format!("{action} failed").into()),
     }
 }
 
-fn news_items_from_frame(text: &str) -> AppResult<Vec<NewsItem>> {
-    let values: Vec<Value> = serde_json::from_str(text)?;
+fn news_items_from_frame(text: &str) -> Vec<NewsItem> {
+    let values: Vec<Value> = match serde_json::from_str(text) {
+        Ok(values) => values,
+        Err(error) => {
+            warn!(%error, "skipping malformed websocket frame");
+            return Vec::new();
+        }
+    };
     if values
         .first()
         .and_then(|item| item.get("T"))
@@ -86,14 +92,19 @@ fn news_items_from_frame(text: &str) -> AppResult<Vec<NewsItem>> {
         != Some("n")
     {
         debug!(?values, "skipping non-news websocket frame");
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     values
         .into_iter()
-        .map(serde_json::from_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        .filter_map(|value| match serde_json::from_value(value) {
+            Ok(item) => Some(item),
+            Err(error) => {
+                warn!(%error, "skipping malformed news item");
+                None
+            }
+        })
+        .collect()
 }
 
 async fn handle_message(
@@ -130,7 +141,7 @@ async fn handle_message(
             }
         }
         Some(NewsKind::News) => {
-            warn!(%symbol, headline = %item.headline, "unknown news type");
+            info!(%symbol, headline = %item.headline, "general news");
             if let Some(payload) =
                 news_payload(&item, &settings.stock_logo, &settings.transparent_png)
             {
@@ -152,21 +163,29 @@ async fn send_or_log(client: &reqwest::Client, webhooks: &[String], payload: &We
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn accepts_subscription_acknowledgment() {
+        let mut stream = futures_util::stream::iter([Ok(Message::Text(
+            r#"[{"T":"subscription","news":["*"]}]"#.into(),
+        ))]);
+        expect_success(&mut stream, "subscription").await.unwrap();
+    }
+
     #[test]
     fn skips_non_news_frames() {
-        assert!(
-            news_items_from_frame(r#"[{"T":"success","msg":"subscribed"}]"#)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(news_items_from_frame(r#"[{"T":"success","msg":"subscribed"}]"#).is_empty());
+    }
+
+    #[test]
+    fn skips_malformed_news_frames() {
+        assert!(news_items_from_frame(r#"[{"T":"n","symbols":"AAPL"}]"#).is_empty());
     }
 
     #[test]
     fn parses_news_frames() {
         let items = news_items_from_frame(
             r#"[{"T":"n","symbols":["AAPL"],"author":"Benzinga Newsdesk","headline":"hi"}]"#,
-        )
-        .unwrap();
+        );
         assert_eq!(items[0].symbols, ["AAPL"]);
         assert_eq!(items[0].headline, "hi");
     }

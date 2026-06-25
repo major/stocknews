@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 static EARNINGS_NEWS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[K|M|B]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[K|M|B]*)")
+    Regex::new(r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[KMB]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[KMB]*)")
         .unwrap()
 });
 static EARNINGS_DATA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(EPS|Sales) ([\d\.()$KMBT]+) (\w*) ([\d\.()$KMBT]+) Est(?:imate|\.)").unwrap()
+    Regex::new(r"(?i)(EPS|Sales) ([\d\.()$KMBT]+) (\w+) ([\d\.()$KMBT]+)(?: Est(?:imate|\.)?)?")
+        .unwrap()
 });
 static COMPANY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.*?) Q[1-4]").unwrap());
 
@@ -118,6 +119,19 @@ mod tests {
                 actual: "$2.00".to_string(),
                 estimate: "$1.80".to_string(),
                 beat: true,
+            })
+        );
+    }
+
+    #[test]
+    fn extracts_earnings_data_without_estimate_word() {
+        let result = extract_earnings_data("AAPL Q1 EPS $2.00 missed $2.10");
+        assert_eq!(
+            result.get("EPS"),
+            Some(&EarningsResult {
+                actual: "$2.00".to_string(),
+                estimate: "$2.10".to_string(),
+                beat: false,
             })
         );
     }
