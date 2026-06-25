@@ -104,6 +104,22 @@ pub fn news_payload(
     })
 }
 
+pub async fn send_payload(
+    client: &reqwest::Client,
+    webhook_urls: &[String],
+    payload: &WebhookPayload,
+) -> Result<(), reqwest::Error> {
+    for url in webhook_urls {
+        client
+            .post(url)
+            .json(payload)
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+    Ok(())
+}
+
 fn logo_url(template: &str, symbol: &str) -> String {
     template.replace("%s", &symbol.to_lowercase())
 }
