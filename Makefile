@@ -1,12 +1,34 @@
-.PHONY: test lint typecheck all
+MSRV := 1.96
+LCOV := lcov.info
 
-test:
-	uv run pytest
+.DEFAULT_GOAL := check
+
+.PHONY: check lint test coverage security deny machete msrv clean
+
+check: lint test security
 
 lint:
-	uv run ruff format --check
+	cargo fmt --check
+	cargo clippy --all-targets -- -D warnings
 
-typecheck:
-	uv run pyright src/*
+test:
+	cargo test
 
-all: lint test typecheck
+coverage:
+	cargo llvm-cov --lcov --output-path $(LCOV)
+	cargo llvm-cov report --summary-only
+
+security: deny machete
+
+deny:
+	cargo deny check
+
+machete:
+	cargo machete
+
+msrv:
+	cargo +$(MSRV) check --all-targets
+
+clean:
+	cargo clean
+	rm -f $(LCOV)

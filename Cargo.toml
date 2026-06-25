@@ -1,0 +1,12 @@
+[package]
+name = "stocknews"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+description = "Alpaca stock news bot for Discord"
+repository = "https://github.com/major/stocknews"
+
+[dependencies]
+
+[dev-dependencies]
