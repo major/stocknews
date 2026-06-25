@@ -44,12 +44,22 @@ jobs:
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ghcr.io/${{ github.repository }}:latest
 
+      - name: Check homehosted token
+        if: github.ref == 'refs/heads/main'
+        env:
+          HOMEHOSTED_PAT: ${{ secrets.HOMEHOSTED_PAT }}
+        run: |
+          if [ -z "$HOMEHOSTED_PAT" ]; then
+            echo "::error::HOMEHOSTED_PAT must be a token with read/write access to major/homehosted"
+            exit 1
+          fi
+
       - name: Checkout homehosted repository
         if: github.ref == 'refs/heads/main'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: major/homehosted
-          token: ${{ secrets.SELFHOSTED_PAT }}
+          token: ${{ secrets.HOMEHOSTED_PAT }}
           path: homehosted
 
       - name: Configure git
