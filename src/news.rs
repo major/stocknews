@@ -26,7 +26,7 @@ pub fn accepted_symbol(item: &NewsItem) -> Option<&str> {
     let [symbol] = item.symbols.as_slice() else {
         return None;
     };
-    (!symbol.contains(':')).then_some(symbol.as_str())
+    (!symbol.trim().is_empty() && !symbol.contains(':')).then_some(symbol.as_str())
 }
 
 pub fn is_allowed_author(item: &NewsItem) -> bool {
@@ -76,6 +76,10 @@ mod tests {
         );
         assert_eq!(
             accepted_symbol(&item(&["TSX:SHOP"], "Benzinga Newsdesk", "headline")),
+            None
+        );
+        assert_eq!(
+            accepted_symbol(&item(&[""], "Benzinga Newsdesk", "headline")),
             None
         );
     }

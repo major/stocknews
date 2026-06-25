@@ -57,7 +57,7 @@ pub fn analyst_payload(
 ) -> Option<WebhookPayload> {
     let report = AnalystNews::new(headline);
     let (emoji, color) = match report.price_target_action.to_lowercase().as_str() {
-        "lowers" => ("️💔", 0xd42020),
+        "lowers" => ("💔", 0xd42020),
         "raises" => ("💚", 0x4caf50),
         "announces" | "maintains" => return None,
         _ => ("❓", 0),

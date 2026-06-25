@@ -1,5 +1,7 @@
 use crate::config::Settings;
-use crate::discord::{analyst_payload, earnings_payload, news_payload, send_payload};
+use crate::discord::{
+    WebhookPayload, analyst_payload, earnings_payload, news_payload, send_payload,
+};
 use crate::news::{NewsItem, NewsKind, accepted_symbol, classify};
 use futures_util::{SinkExt, StreamExt};
 use html_escape::decode_html_entities;
@@ -12,6 +14,8 @@ pub type AppResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub async fn stream_news(settings: &Settings) -> AppResult<()> {
     let (ws, _) = connect_async(&settings.alpaca_news_stream_url).await?;
     let (mut write, mut read) = ws.split();
+
+    expect_success(&mut read, "connection").await?;
 
     write
         .send(Message::Text(
@@ -42,7 +46,7 @@ pub async fn stream_news(settings: &Settings) -> AppResult<()> {
         let Message::Text(text) = message? else {
             continue;
         };
-        for item in serde_json::from_str::<Vec<NewsItem>>(&text)? {
+        for item in news_items_from_frame(&text)? {
             handle_message(&client, settings, item).await?;
         }
     }
@@ -73,6 +77,25 @@ where
     }
 }
 
+fn news_items_from_frame(text: &str) -> AppResult<Vec<NewsItem>> {
+    let values: Vec<Value> = serde_json::from_str(text)?;
+    if values
+        .first()
+        .and_then(|item| item.get("T"))
+        .and_then(Value::as_str)
+        != Some("n")
+    {
+        debug!(?values, "skipping non-news websocket frame");
+        return Ok(Vec::new());
+    }
+
+    values
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 async fn handle_message(
     client: &reqwest::Client,
     settings: &Settings,
@@ -92,7 +115,7 @@ async fn handle_message(
                 &settings.stock_logo,
                 &settings.transparent_png,
             ) {
-                send_payload(client, &settings.discord_earnings_webhooks, &payload).await?;
+                send_or_log(client, &settings.discord_earnings_webhooks, &payload).await;
             }
         }
         Some(NewsKind::Analyst) => {
@@ -103,7 +126,7 @@ async fn handle_message(
                 &settings.stock_logo,
                 &settings.transparent_png,
             ) {
-                send_payload(client, &settings.discord_analyst_webhooks, &payload).await?;
+                send_or_log(client, &settings.discord_analyst_webhooks, &payload).await;
             }
         }
         Some(NewsKind::News) => {
@@ -111,10 +134,40 @@ async fn handle_message(
             if let Some(payload) =
                 news_payload(&item, &settings.stock_logo, &settings.transparent_png)
             {
-                send_payload(client, &settings.discord_news_webhooks, &payload).await?;
+                send_or_log(client, &settings.discord_news_webhooks, &payload).await;
             }
         }
         None => {}
     }
     Ok(())
+}
+
+async fn send_or_log(client: &reqwest::Client, webhooks: &[String], payload: &WebhookPayload) {
+    if let Err(error) = send_payload(client, webhooks, payload).await {
+        warn!(%error, "failed to send Discord webhook");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_non_news_frames() {
+        assert!(
+            news_items_from_frame(r#"[{"T":"success","msg":"subscribed"}]"#)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parses_news_frames() {
+        let items = news_items_from_frame(
+            r#"[{"T":"n","symbols":["AAPL"],"author":"Benzinga Newsdesk","headline":"hi"}]"#,
+        )
+        .unwrap();
+        assert_eq!(items[0].symbols, ["AAPL"]);
+        assert_eq!(items[0].headline, "hi");
+    }
 }

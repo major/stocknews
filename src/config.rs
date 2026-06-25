@@ -1,6 +1,6 @@
 use std::env;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Settings {
     pub alpaca_api_key: String,
     pub alpaca_api_secret: String,
@@ -16,10 +16,10 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn from_env() -> Self {
-        Self {
-            alpaca_api_key: env_string("ALPACA_API_KEY", ""),
-            alpaca_api_secret: env_string("ALPACA_API_SECRET", ""),
+    pub fn from_env() -> Result<Self, env::VarError> {
+        Ok(Self {
+            alpaca_api_key: env::var("ALPACA_API_KEY")?,
+            alpaca_api_secret: env::var("ALPACA_API_SECRET")?,
             alpaca_news_stream_url: env_string(
                 "ALPACA_NEWS_STREAM_URL",
                 "wss://stream.data.alpaca.markets/v1beta1/news",
@@ -39,7 +39,7 @@ impl Settings {
             sentry_dsn: env_string("SENTRY_DSN", ""),
             sentry_debug: env::var("SENTRY_DEBUG")
                 .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE")),
-        }
+        })
     }
 }
 
