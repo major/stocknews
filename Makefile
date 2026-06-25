@@ -15,8 +15,8 @@ test:
 	cargo test
 
 coverage:
-	cargo llvm-cov --lcov --output-path $(LCOV)
-	cargo llvm-cov report --summary-only
+	cargo llvm-cov --lcov --output-path $(LCOV) --ignore-filename-regex 'src/(alpaca|config|main)\.rs'
+	cargo llvm-cov report --summary-only --ignore-filename-regex 'src/(alpaca|config|main)\.rs'
 
 security: deny machete
 
