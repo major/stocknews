@@ -22,11 +22,32 @@ pub enum NewsKind {
     News,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    SymbolCount,
+    EmptySymbol,
+    NonUsExchange,
+    UnapprovedAuthor,
+}
+
 pub fn accepted_symbol(item: &NewsItem) -> Option<&str> {
     let [symbol] = item.symbols.as_slice() else {
         return None;
     };
     (!symbol.trim().is_empty() && !symbol.contains(':')).then_some(symbol.as_str())
+}
+
+pub fn skip_reason(item: &NewsItem) -> Option<SkipReason> {
+    let [symbol] = item.symbols.as_slice() else {
+        return Some(SkipReason::SymbolCount);
+    };
+    if symbol.trim().is_empty() {
+        return Some(SkipReason::EmptySymbol);
+    }
+    if symbol.contains(':') {
+        return Some(SkipReason::NonUsExchange);
+    }
+    (!is_allowed_author(item)).then_some(SkipReason::UnapprovedAuthor)
 }
 
 pub fn is_allowed_author(item: &NewsItem) -> bool {
@@ -81,6 +102,30 @@ mod tests {
         assert_eq!(
             accepted_symbol(&item(&[""], "Benzinga Newsdesk", "headline")),
             None
+        );
+    }
+
+    #[test]
+    fn explains_skipped_items() {
+        assert_eq!(
+            skip_reason(&item(&["AAPL", "MSFT"], "Benzinga Newsdesk", "headline")),
+            Some(SkipReason::SymbolCount)
+        );
+        assert_eq!(
+            skip_reason(&item(&[""], "Benzinga Newsdesk", "headline")),
+            Some(SkipReason::EmptySymbol)
+        );
+        assert_eq!(
+            skip_reason(&item(&["TSX:SHOP"], "Benzinga Newsdesk", "headline")),
+            Some(SkipReason::NonUsExchange)
+        );
+        assert_eq!(
+            skip_reason(&item(
+                &["AAPL"],
+                "Someone Else",
+                "AAPL Q1 EPS $2.00 vs $1.80 est."
+            )),
+            Some(SkipReason::UnapprovedAuthor)
         );
     }
 

@@ -2,7 +2,7 @@ use crate::config::Settings;
 use crate::discord::{
     WebhookPayload, analyst_payload, earnings_payload, news_payload, send_payload,
 };
-use crate::news::{NewsItem, NewsKind, accepted_symbol, classify};
+use crate::news::{NewsItem, NewsKind, SkipReason, accepted_symbol, classify, skip_reason};
 use futures_util::{SinkExt, StreamExt};
 use html_escape::decode_html_entities;
 use serde_json::{Value, json};
@@ -112,6 +112,10 @@ async fn handle_message(
     settings: &Settings,
     mut item: NewsItem,
 ) -> AppResult<()> {
+    if let Some(reason) = skip_reason(&item) {
+        log_skip(reason, &item);
+        return Ok(());
+    }
     let Some(symbol) = accepted_symbol(&item).map(str::to_string) else {
         return Ok(());
     };
@@ -151,6 +155,24 @@ async fn handle_message(
         None => {}
     }
     Ok(())
+}
+
+fn log_skip(reason: SkipReason, item: &NewsItem) {
+    let symbol = item.symbols.first().map(String::as_str).unwrap_or("");
+    match reason {
+        SkipReason::SymbolCount => {
+            info!(symbols = ?item.symbols, author = %item.author, headline = %item.headline, "skipping news without exactly one symbol")
+        }
+        SkipReason::EmptySymbol => {
+            info!(author = %item.author, headline = %item.headline, "skipping news with empty symbol")
+        }
+        SkipReason::NonUsExchange => {
+            info!(%symbol, author = %item.author, headline = %item.headline, "skipping non-US exchange")
+        }
+        SkipReason::UnapprovedAuthor => {
+            info!(%symbol, author = %item.author, headline = %item.headline, "skipping non-approved author")
+        }
+    }
 }
 
 async fn send_or_log(client: &reqwest::Client, webhooks: &[String], payload: &WebhookPayload) {
