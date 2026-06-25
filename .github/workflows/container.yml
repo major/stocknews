@@ -63,13 +63,19 @@ jobs:
         run: |
           cd selfhosted
           DIGEST="${{ steps.build.outputs.digest }}"
-          sed -i -E "s|ghcr.io/major/stocknews@sha256:[a-f0-9]{64}|ghcr.io/major/stocknews@${DIGEST}|g" apps/base/stocknews/deployment.yaml
+          MANIFEST="apps/base/stocknews/deployment.yaml"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::notice::$MANIFEST not found; skipping deployment update"
+            exit 0
+          fi
 
-          if git diff --quiet apps/base/stocknews/deployment.yaml; then
+          sed -i -E "s|ghcr.io/major/stocknews@sha256:[a-f0-9]{64}|ghcr.io/major/stocknews@${DIGEST}|g" "$MANIFEST"
+
+          if git diff --quiet "$MANIFEST"; then
             echo "No changes to deployment.yaml, skipping commit"
             exit 0
           fi
 
-          git add apps/base/stocknews/deployment.yaml
+          git add "$MANIFEST"
           git commit -m "🤖 Update stocknews deployment to ${DIGEST}"
           git push
