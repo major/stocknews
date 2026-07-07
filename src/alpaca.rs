@@ -6,12 +6,45 @@ use crate::news::{NewsItem, NewsKind, SkipReason, accepted_symbol, classify, ski
 use futures_util::{SinkExt, StreamExt};
 use html_escape::decode_html_entities;
 use serde_json::{Value, json};
+use std::time::Duration;
+use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-pub async fn stream_news(settings: &Settings) -> AppResult<()> {
+/// How often we proactively ping the server. This also flushes any
+/// automatic pong replies tungstenite queued on our behalf, since those
+/// only go out when the write half is polled.
+const PING_INTERVAL: Duration = Duration::from_secs(30);
+/// How long we tolerate silence (no message, ping tick, or pong) before
+/// treating the connection as dead and forcing a reconnect. A live feed
+/// legitimately goes quiet for hours outside market hours, but a dead TCP
+/// connection with no FIN/RST looks identical to `read.next()` forever,
+/// so this timeout is the only way to detect it. Reset only when a frame
+/// actually arrives, not on every loop iteration.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
+/// Backoff between reconnect attempts so a persistent outage doesn't spin
+/// the CPU or hammer Alpaca with connection attempts.
+const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// Cap on Discord webhook requests. Without this, a stalled POST blocks
+/// `handle_message` (and therefore the websocket read loop) indefinitely,
+/// defeating the read timeout above.
+const DISCORD_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Reconnects to the news stream whenever it errors out or ends, instead of
+/// letting a single disconnect (or a stalled connection) stop the whole
+/// process from sending Discord alerts.
+pub async fn run(settings: &Settings) {
+    loop {
+        if let Err(error) = stream_news(settings).await {
+            warn!(%error, "news stream disconnected, reconnecting");
+        }
+        sleep(RECONNECT_DELAY).await;
+    }
+}
+
+async fn stream_news(settings: &Settings) -> AppResult<()> {
     let (ws, _) = connect_async(&settings.alpaca_news_stream_url).await?;
     let (mut write, mut read) = ws.split();
 
@@ -41,16 +74,38 @@ pub async fn stream_news(settings: &Settings) -> AppResult<()> {
     expect_success(&mut read, "subscription").await?;
     info!("subscribed to news successfully");
 
-    let client = reqwest::Client::new();
-    while let Some(message) = read.next().await {
-        let Message::Text(text) = message? else {
-            continue;
-        };
-        for item in news_items_from_frame(&text) {
-            handle_message(&client, settings, item).await?;
+    let client = reqwest::Client::builder()
+        .timeout(DISCORD_REQUEST_TIMEOUT)
+        .build()?;
+    let mut ping_interval = interval(PING_INTERVAL);
+    ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    ping_interval.tick().await; // first tick fires immediately; skip it
+
+    let read_deadline = sleep(READ_TIMEOUT);
+    tokio::pin!(read_deadline);
+
+    loop {
+        tokio::select! {
+            _ = ping_interval.tick() => {
+                write.send(Message::Ping(Vec::new().into())).await?;
+            }
+            () = &mut read_deadline => {
+                return Err("no messages received within timeout, reconnecting".into());
+            }
+            message = read.next() => {
+                read_deadline.as_mut().reset(Instant::now() + READ_TIMEOUT);
+                let Some(message) = message else {
+                    return Err("websocket closed".into());
+                };
+                let Message::Text(text) = message? else {
+                    continue;
+                };
+                for item in news_items_from_frame(&text) {
+                    handle_message(&client, settings, item).await?;
+                }
+            }
         }
     }
-    Ok(())
 }
 
 async fn expect_success<S>(read: &mut S, action: &str) -> AppResult<()>

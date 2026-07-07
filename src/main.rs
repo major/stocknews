@@ -1,4 +1,4 @@
-use stocknews::{alpaca::stream_news, config::Settings};
+use stocknews::{alpaca::run, config::Settings};
 
 #[tokio::main]
 async fn main() -> stocknews::alpaca::AppResult<()> {
@@ -6,10 +6,7 @@ async fn main() -> stocknews::alpaca::AppResult<()> {
     let settings = Settings::from_env()?;
 
     tokio::select! {
-        result = stream_news(&settings) => result,
-        signal = tokio::signal::ctrl_c() => {
-            signal?;
-            Ok(())
-        }
+        () = run(&settings) => Ok(()),
+        signal = tokio::signal::ctrl_c() => signal.map_err(Into::into),
     }
 }
