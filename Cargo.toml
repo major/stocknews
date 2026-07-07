@@ -12,7 +12,7 @@ futures-util = "0.3"
 html-escape = "0.2"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-sentry = { version = "0.48", default-features = false, features = ["backtrace", "panic", "tracing", "rustls"] }
+sentry = { version = "0.48", default-features = false, features = ["backtrace", "panic", "tracing", "reqwest", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
