@@ -1480,6 +1480,7 @@ dependencies = [
  "html-escape",
  "regex",
  "reqwest 0.12.28",
+ "rustls",
  "sentry",
  "serde",
  "serde_json",
