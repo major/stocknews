@@ -20,6 +20,12 @@ async fn main() -> stocknews::alpaca::AppResult<()> {
         .with(sentry::integrations::tracing::layer())
         .init();
 
+    tracing::info!(
+        git_sha = env!("GIT_SHA"),
+        build_date = env!("BUILD_DATE"),
+        "starting stocknews"
+    );
+
     tokio::select! {
         () = run(&settings) => Ok(()),
         signal = tokio::signal::ctrl_c() => signal.map_err(Into::into),
