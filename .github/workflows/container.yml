@@ -43,6 +43,8 @@ jobs:
           platforms: linux/amd64
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ghcr.io/${{ github.repository }}:latest
+          build-args: |
+            GIT_SHA=${{ github.sha }}
 
       - name: Check homehosted token
         if: github.ref == 'refs/heads/main'

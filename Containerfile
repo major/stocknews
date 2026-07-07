@@ -1,4 +1,6 @@
 FROM registry.access.redhat.com/hi/rust:1.96-builder AS builder
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked
