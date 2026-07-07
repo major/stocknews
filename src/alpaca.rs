@@ -27,6 +27,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// Backoff between reconnect attempts so a persistent outage doesn't spin
 /// the CPU or hammer Alpaca with connection attempts.
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// Cap on Discord webhook requests. Without this, a stalled POST blocks
+/// `handle_message` (and therefore the websocket read loop) indefinitely,
+/// defeating the read timeout above.
+const DISCORD_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Reconnects to the news stream whenever it errors out or ends, instead of
 /// letting a single disconnect (or a stalled connection) stop the whole
@@ -70,7 +74,9 @@ async fn stream_news(settings: &Settings) -> AppResult<()> {
     expect_success(&mut read, "subscription").await?;
     info!("subscribed to news successfully");
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(DISCORD_REQUEST_TIMEOUT)
+        .build()?;
     let mut ping_interval = interval(PING_INTERVAL);
     ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     ping_interval.tick().await; // first tick fires immediately; skip it
