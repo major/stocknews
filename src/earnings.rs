@@ -7,10 +7,11 @@ static EARNINGS_NEWS_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 static EARNINGS_DATA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(EPS|Sales) ([\d\.()$KMBT]+) (\w+) ([\d\.()$KMBT]+)(?: Est(?:imate|\.)?)?")
+    Regex::new(r"(?i)(?P<kind>EPS|Sales) (?P<actual>[\d\.()$KMBT]+) (?P<result>\w+) (?P<estimate>[\d\.()$KMBT]+)(?: Est(?:imate|\.)?)?")
         .unwrap()
 });
-static COMPANY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.*?) Q[1-4]").unwrap());
+static COMPANY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?P<company>.*?) Q[1-4]").unwrap());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EarningsResult {
@@ -31,7 +32,7 @@ pub fn extract_earnings_data(headline: &str) -> HashMap<String, EarningsResult> 
     EARNINGS_DATA_RE
         .captures_iter(headline)
         .map(|captures| {
-            let result_type = if captures[1].eq_ignore_ascii_case("eps") {
+            let result_type = if captures["kind"].eq_ignore_ascii_case("eps") {
                 "EPS"
             } else {
                 "Sales"
@@ -39,9 +40,9 @@ pub fn extract_earnings_data(headline: &str) -> HashMap<String, EarningsResult> 
             (
                 result_type.to_string(),
                 EarningsResult {
-                    actual: captures[2].to_string(),
-                    estimate: captures[4].to_string(),
-                    beat: parse_earnings_result(&captures[3]),
+                    actual: captures["actual"].to_string(),
+                    estimate: captures["estimate"].to_string(),
+                    beat: parse_earnings_result(&captures["result"]),
                 },
             )
         })
@@ -55,7 +56,7 @@ pub fn parse_earnings_result(raw_result: &str) -> bool {
 pub fn company_name(headline: &str) -> String {
     COMPANY_RE
         .captures(headline)
-        .map(|captures| captures[1].to_string())
+        .map(|captures| captures["company"].to_string())
         .unwrap_or_default()
 }
 

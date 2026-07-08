@@ -21,14 +21,17 @@ impl PriceTargetAction {
     }
 }
 
-static MAINTAINS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^([\w\s]+) (Maintains|Reiterates) (.*) on (.+),").unwrap());
-static ACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^([\w\s]+) (Downgrades|Upgrades|Initiates Coverage) (?:on\s)*([\w\s]+) (?:with|to) (.+),").unwrap()
+static MAINTAINS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?P<firm>[\w\s]+) (?P<action>Maintains|Reiterates) (?P<guidance>.*) on (?P<stock>.+),")
+        .unwrap()
 });
-static PRICE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$([\d\.]+)").unwrap());
+static ACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?P<firm>[\w\s]+) (?P<action>Downgrades|Upgrades|Initiates Coverage) (?:on\s)*(?P<stock>[\w\s]+) (?:with|to) (?P<guidance>.+),")
+        .unwrap()
+});
+static PRICE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$(?P<price>[\d\.]+)").unwrap());
 static PRICE_ACTION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r", (Lowers|Maintains|Raises|Announces)").unwrap());
+    LazyLock::new(|| Regex::new(r", (?P<price_action>Lowers|Maintains|Raises|Announces)").unwrap());
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnalystNews {
@@ -43,28 +46,34 @@ pub struct AnalystNews {
 
 fn parse_analyst_action(headline: &str) -> (String, String, String, String) {
     if let Some(captures) = MAINTAINS_RE.captures(headline) {
-        let firm = captures[1].to_string();
-        let action = captures[2].to_string();
-        let guidance = captures[3].trim_end_matches("Rating").trim().to_string();
-        let stock = captures[4].to_string();
+        let firm = captures["firm"].to_string();
+        let action = captures["action"].to_string();
+        let guidance = captures["guidance"]
+            .trim_end_matches("Rating")
+            .trim()
+            .to_string();
+        let stock = captures["stock"].to_string();
         return (firm, action, guidance, stock);
     }
 
     if let Some(captures) = ACTION_RE.captures(headline) {
-        let firm = captures[1].to_string();
-        let action = captures[2].to_string();
-        let stock = captures[3].to_string();
-        let guidance = captures[4].trim_end_matches("Rating").trim().to_string();
+        let firm = captures["firm"].to_string();
+        let action = captures["action"].to_string();
+        let stock = captures["stock"].to_string();
+        let guidance = captures["guidance"]
+            .trim_end_matches("Rating")
+            .trim()
+            .to_string();
         return (firm, action, guidance, stock);
     }
 
     (String::new(), String::new(), String::new(), String::new())
 }
 
-fn extract_value(headline: &str, regex: &Regex) -> String {
+fn extract_value(headline: &str, regex: &Regex, name: &str) -> String {
     regex
         .captures(headline)
-        .map(|captures| captures[1].to_string())
+        .map(|captures| captures[name].to_string())
         .unwrap_or_default()
 }
 
@@ -72,12 +81,12 @@ impl AnalystNews {
     pub fn new(headline: impl Into<String>) -> Self {
         let headline = headline.into();
         let (firm, action, guidance, stock) = parse_analyst_action(&headline);
-        let price_target = extract_value(&headline, &PRICE_RE)
+        let price_target = extract_value(&headline, &PRICE_RE, "price")
             .parse::<f64>()
             .unwrap_or_default();
         let price_target_action = PRICE_ACTION_RE
             .captures(&headline)
-            .and_then(|captures| PriceTargetAction::from_captured_str(&captures[1]));
+            .and_then(|captures| PriceTargetAction::from_captured_str(&captures["price_action"]));
         Self {
             headline,
             firm,
