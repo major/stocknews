@@ -165,6 +165,23 @@ mod tests {
     }
 
     #[test]
+    fn maintains_price_target() {
+        let news = AnalystNews::new(
+            "Morgan Stanley Upgrades Tesla to Overweight, Maintains Price Target at $400",
+        );
+        assert_eq!(news.price_target_action, Some(PriceTargetAction::Maintains));
+    }
+
+    #[test]
+    fn no_analyst_action_match() {
+        let news = AnalystNews::new("Apple releases new iPhone");
+        assert_eq!(news.firm, "");
+        assert_eq!(news.action, "");
+        assert_eq!(news.guidance, "");
+        assert_eq!(news.stock, "");
+    }
+
+    #[test]
     fn strip_rating_suffix() {
         let news = AnalystNews::new(
             "UBS Downgrades Microsoft to Neutral Rating, Lowers Price Target to $275",

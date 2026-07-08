@@ -173,6 +173,19 @@ mod tests {
     }
 
     #[test]
+    fn builds_analyst_payload_for_lowers() {
+        let payload = analyst_payload(
+            "AMZN",
+            "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135",
+            LOGO,
+            TRANSPARENT,
+        )
+        .unwrap();
+        assert_eq!(payload.embeds[0].title, "💔 AMZN: Amazon $135.00");
+        assert_eq!(payload.embeds[0].color, Some(0xd42020));
+    }
+
+    #[test]
     fn builds_analyst_payload_for_unknown_action() {
         let payload = analyst_payload(
             "AAPL",
