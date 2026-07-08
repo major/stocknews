@@ -30,7 +30,7 @@ static PRICE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$([\d\.]+)").u
 static PRICE_ACTION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r", (Lowers|Maintains|Raises|Announces)").unwrap());
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnalystNews {
     pub headline: String,
     pub firm: String,
@@ -41,49 +41,52 @@ pub struct AnalystNews {
     pub price_target: f64,
 }
 
+fn parse_analyst_action(headline: &str) -> (String, String, String, String) {
+    if let Some(captures) = MAINTAINS_RE.captures(headline) {
+        let firm = captures[1].to_string();
+        let action = captures[2].to_string();
+        let guidance = captures[3].trim_end_matches("Rating").trim().to_string();
+        let stock = captures[4].to_string();
+        return (firm, action, guidance, stock);
+    }
+
+    if let Some(captures) = ACTION_RE.captures(headline) {
+        let firm = captures[1].to_string();
+        let action = captures[2].to_string();
+        let stock = captures[3].to_string();
+        let guidance = captures[4].trim_end_matches("Rating").trim().to_string();
+        return (firm, action, guidance, stock);
+    }
+
+    (String::new(), String::new(), String::new(), String::new())
+}
+
+fn extract_value(headline: &str, regex: &Regex) -> String {
+    regex
+        .captures(headline)
+        .map(|captures| captures[1].to_string())
+        .unwrap_or_default()
+}
+
 impl AnalystNews {
     pub fn new(headline: impl Into<String>) -> Self {
-        let mut news = Self {
-            headline: headline.into(),
-            ..Self::default()
-        };
-        news.parse();
-        news
-    }
-
-    fn parse(&mut self) {
-        self.parse_analyst_action();
-        self.price_target = self
-            .extract_value(&PRICE_RE)
+        let headline = headline.into();
+        let (firm, action, guidance, stock) = parse_analyst_action(&headline);
+        let price_target = extract_value(&headline, &PRICE_RE)
             .parse::<f64>()
             .unwrap_or_default();
-        self.price_target_action = PRICE_ACTION_RE
-            .captures(&self.headline)
+        let price_target_action = PRICE_ACTION_RE
+            .captures(&headline)
             .and_then(|captures| PriceTargetAction::from_captured_str(&captures[1]));
-    }
-
-    fn parse_analyst_action(&mut self) {
-        if let Some(captures) = MAINTAINS_RE.captures(&self.headline) {
-            self.firm = captures[1].to_string();
-            self.action = captures[2].to_string();
-            self.guidance = captures[3].trim_end_matches("Rating").trim().to_string();
-            self.stock = captures[4].to_string();
-            return;
+        Self {
+            headline,
+            firm,
+            action,
+            guidance,
+            stock,
+            price_target,
+            price_target_action,
         }
-
-        if let Some(captures) = ACTION_RE.captures(&self.headline) {
-            self.firm = captures[1].to_string();
-            self.action = captures[2].to_string();
-            self.stock = captures[3].to_string();
-            self.guidance = captures[4].trim_end_matches("Rating").trim().to_string();
-        }
-    }
-
-    fn extract_value(&self, regex: &Regex) -> String {
-        regex
-            .captures(&self.headline)
-            .map(|captures| captures[1].to_string())
-            .unwrap_or_default()
     }
 }
 
