@@ -3,3 +3,6 @@ lcov.info
 .env
 .vscode/
 .idea/
+
+# deepwork scratch state (not part of repo)
+.slim/deepwork/

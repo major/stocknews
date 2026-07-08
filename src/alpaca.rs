@@ -167,6 +167,9 @@ async fn handle_message(
     settings: &Settings,
     mut item: NewsItem,
 ) -> AppResult<()> {
+    if let std::borrow::Cow::Owned(decoded) = decode_html_entities(&item.headline) {
+        item.headline = decoded;
+    }
     if let Some(reason) = skip_reason(&item) {
         log_skip(reason, &item);
         return Ok(());
@@ -175,7 +178,6 @@ async fn handle_message(
         return Ok(());
     };
 
-    item.headline = decode_html_entities(&item.headline).into_owned();
     match classify(&item) {
         Some(NewsKind::Earnings) => {
             info!(%symbol, headline = %item.headline, "earnings news");
