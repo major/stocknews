@@ -1,4 +1,4 @@
-use crate::analyst::AnalystNews;
+use crate::analyst::{AnalystNews, PriceTargetAction};
 use crate::earnings::{company_name, earnings_description};
 use crate::news::NewsItem;
 use serde::Serialize;
@@ -56,11 +56,11 @@ pub fn analyst_payload(
     transparent_png: &str,
 ) -> Option<WebhookPayload> {
     let report = AnalystNews::new(headline);
-    let (emoji, color) = match report.price_target_action.to_lowercase().as_str() {
-        "lowers" => ("💔", 0xd42020),
-        "raises" => ("💚", 0x4caf50),
-        "announces" | "maintains" => return None,
-        _ => ("❓", 0),
+    let (emoji, color) = match report.price_target_action {
+        Some(PriceTargetAction::Lowers) => ("💔", 0xd42020),
+        Some(PriceTargetAction::Raises) => ("💚", 0x4caf50),
+        Some(PriceTargetAction::Announces | PriceTargetAction::Maintains) => return None,
+        None => ("❓", 0),
     };
 
     Some(WebhookPayload {
@@ -170,6 +170,31 @@ mod tests {
         .unwrap();
         assert_eq!(payload.embeds[0].title, "💚 AAPL: Apple $223.00");
         assert_eq!(payload.embeds[0].color, Some(0x4caf50));
+    }
+
+    #[test]
+    fn builds_analyst_payload_for_lowers() {
+        let payload = analyst_payload(
+            "AMZN",
+            "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135",
+            LOGO,
+            TRANSPARENT,
+        )
+        .unwrap();
+        assert_eq!(payload.embeds[0].title, "💔 AMZN: Amazon $135.00");
+        assert_eq!(payload.embeds[0].color, Some(0xd42020));
+    }
+
+    #[test]
+    fn builds_analyst_payload_for_unknown_action() {
+        let payload = analyst_payload(
+            "AAPL",
+            "Goldman Sachs Maintains Buy on Apple, Says Fundamentals Remain Strong",
+            LOGO,
+            TRANSPARENT,
+        )
+        .unwrap();
+        assert_eq!(payload.embeds[0].color, Some(0));
     }
 
     #[test]
