@@ -1,6 +1,26 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriceTargetAction {
+    Lowers,
+    Raises,
+    Announces,
+    Maintains,
+}
+
+impl PriceTargetAction {
+    fn from_captured_str(s: &str) -> Option<Self> {
+        match s {
+            "Lowers" => Some(Self::Lowers),
+            "Raises" => Some(Self::Raises),
+            "Announces" => Some(Self::Announces),
+            "Maintains" => Some(Self::Maintains),
+            _ => None,
+        }
+    }
+}
+
 static MAINTAINS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^([\w\s]+) (Maintains|Reiterates) (.*) on (.+),").unwrap());
 static ACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -17,7 +37,7 @@ pub struct AnalystNews {
     pub action: String,
     pub guidance: String,
     pub stock: String,
-    pub price_target_action: String,
+    pub price_target_action: Option<PriceTargetAction>,
     pub price_target: f64,
 }
 
@@ -37,7 +57,9 @@ impl AnalystNews {
             .extract_value(&PRICE_RE)
             .parse::<f64>()
             .unwrap_or_default();
-        self.price_target_action = self.extract_value(&PRICE_ACTION_RE);
+        self.price_target_action = PRICE_ACTION_RE
+            .captures(&self.headline)
+            .and_then(|captures| PriceTargetAction::from_captured_str(&captures[1]));
     }
 
     fn parse_analyst_action(&mut self) {
@@ -77,7 +99,7 @@ mod tests {
         assert_eq!(news.action, "Maintains");
         assert_eq!(news.guidance, "Buy");
         assert_eq!(news.stock, "Apple");
-        assert_eq!(news.price_target_action, "Raises");
+        assert_eq!(news.price_target_action, Some(PriceTargetAction::Raises));
         assert_eq!(news.price_target, 223.0);
     }
 
@@ -90,7 +112,7 @@ mod tests {
         assert_eq!(news.action, "Upgrades");
         assert_eq!(news.stock, "Tesla");
         assert_eq!(news.guidance, "Overweight");
-        assert_eq!(news.price_target_action, "Raises");
+        assert_eq!(news.price_target_action, Some(PriceTargetAction::Raises));
         assert_eq!(news.price_target, 400.0);
     }
 
@@ -103,7 +125,7 @@ mod tests {
         assert_eq!(news.action, "Downgrades");
         assert_eq!(news.stock, "Amazon");
         assert_eq!(news.guidance, "Neutral");
-        assert_eq!(news.price_target_action, "Lowers");
+        assert_eq!(news.price_target_action, Some(PriceTargetAction::Lowers));
         assert_eq!(news.price_target, 135.0);
     }
 
@@ -116,8 +138,18 @@ mod tests {
         assert_eq!(news.action, "Initiates Coverage");
         assert_eq!(news.stock, "Nvidia");
         assert_eq!(news.guidance, "Overweight");
-        assert_eq!(news.price_target_action, "Announces");
+        assert_eq!(news.price_target_action, Some(PriceTargetAction::Announces));
         assert_eq!(news.price_target, 850.0);
+    }
+
+    #[test]
+    fn no_price_target_action() {
+        let news = AnalystNews::new(
+            "Goldman Sachs Maintains Buy on Apple, Says Fundamentals Remain Strong",
+        );
+        assert_eq!(news.firm, "Goldman Sachs");
+        assert_eq!(news.stock, "Apple");
+        assert_eq!(news.price_target_action, None);
     }
 
     #[test]
