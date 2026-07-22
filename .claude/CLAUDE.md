@@ -1,22 +1,24 @@
 # CLAUDE.md
 
-Python bot streaming real-time stock news from Alpaca WebSocket API → Discord notifications. Filters for earnings & analyst ratings from approved sources (Benzinga Newsdesk).
+Go bot streaming real-time stock news from Alpaca to Discord notifications. Filters for earnings and analyst ratings from approved sources.
 
 ## Commands
-- `uv run pytest` - Tests with coverage
-- `uv run ruff format --check` - Lint
-- `uv run pyright src/*` - Type check
-- `make all` - Lint + tests + typecheck
-- `uv run run_bot.py` - Start bot
-- `docker compose up` - Run in Docker
+- `go test ./cmd/stocknews ./internal/...` - Tests
+- `go run mvdan.cc/gofumpt -l .` - Format check
+- `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint run ./...` - Lint and exported comment checks
+- `make check` - Full local gate
+- `go run ./cmd/stocknews` - Start bot
+- `podman compose up --build` - Run in containers
 
 ## Architecture
-**news_realtime.py**: WebSocket client, auth, filtering (single symbol, US exchanges, approved authors), message routing
-**notify.py**: Discord notifications with rich embeds
-**utils.py**: Earnings regex parsing, company name extraction
-**analyst.py**: Parse analyst ratings/price targets from headlines
-**config.py**: Pydantic settings (API keys, webhooks, filters)
+**cmd/stocknews/main.go**: Entrypoint and process lifecycle
+**internal/runtime**: Stream-to-dispatch orchestration
+**internal/alpaca**: Alpaca news stream integration
+**internal/discord**: Discord notifications with embeds
+**internal/earnings**: Earnings parsing helpers
+**internal/analyst**: Analyst rating parsing helpers
+**internal/config**: Environment configuration
 
-**Flow**: Alpaca WebSocket → filter → categorize (earnings/analyst/news) → Discord
+**Flow**: Alpaca stream → filter → categorize (earnings/analyst/news) → Discord
 
-**Stack**: `uv`, `httpx-ws`, pytest, Pydantic, Sentry
+**Stack**: Go stdlib + Alpaca SDK

@@ -27,9 +27,9 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         with:
-          languages: rust
-          build-mode: none
+          languages: go
+          build-mode: autobuild
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         with:
-          category: "/language:rust"
+          category: "/language:go"

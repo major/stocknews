@@ -1,34 +1,36 @@
-MSRV := 1.96
-LCOV := lcov.info
+GOFMT := go run mvdan.cc/gofumpt
+GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+COVERAGE_PROFILE := coverage.out
+COVERAGE_THRESHOLD := 95
+APP_PACKAGES := ./cmd/stocknews ./internal/...
+TEST_PACKAGES := $(APP_PACKAGES) ./tools/coveragecheck
+COVERAGE_PACKAGES := $(TEST_PACKAGES)
 
 .DEFAULT_GOAL := check
 
-.PHONY: check lint test coverage security deny machete msrv clean
+.PHONY: check fmt lint test coverage clean
 
-check: lint test security
+check: fmt lint test coverage
+
+fmt:
+	@tmp="$$(mktemp)"; trap 'rm -f "$$tmp"' EXIT; \
+	$(GOFMT) -l . >"$$tmp"; \
+	if [ -s "$$tmp" ]; then \
+		printf 'gofumpt found unformatted files:\n'; \
+		cat "$$tmp"; \
+		exit 1; \
+	fi
 
 lint:
-	cargo fmt --check
-	cargo clippy --all-targets -- -D warnings
+	$(GOLANGCI_LINT) run ./...
 
 test:
-	cargo test
+	go test $(TEST_PACKAGES)
 
 coverage:
-	cargo llvm-cov --lcov --output-path $(LCOV) --ignore-filename-regex 'src/(alpaca|config|main)\.rs'
-	cargo llvm-cov report --summary-only --ignore-filename-regex 'src/(alpaca|config|main)\.rs'
-
-security: deny machete
-
-deny:
-	cargo deny check
-
-machete:
-	cargo machete
-
-msrv:
-	cargo +$(MSRV) check --all-targets
+	@coverpkg="$$(go list $(COVERAGE_PACKAGES) | paste -sd, -)"; \
+	go test -covermode=count -coverpkg="$$coverpkg" -coverprofile=$(COVERAGE_PROFILE) $(TEST_PACKAGES)
+	go run ./tools/coveragecheck -profile $(COVERAGE_PROFILE) -min $(COVERAGE_THRESHOLD)
 
 clean:
-	cargo clean
-	rm -f $(LCOV)
+	rm -f $(COVERAGE_PROFILE)

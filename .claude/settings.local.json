@@ -1,8 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run pytest:*)",
-      "Bash(uv run ruff:*)"
+      "Bash(go test:*)",
+      "Bash(go run ./cmd/stocknews:*)",
+      "Bash(go run ./tools/coveragecheck -profile coverage.out -min 95:*)",
+      "Bash(go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint run ./...:*)",
+      "Bash(go run mvdan.cc/gofumpt -l .:*)",
+      "Bash(go run mvdan.cc/gofumpt -w .:*)",
+      "Bash(make check:*)"
     ],
     "deny": [],
     "ask": []
