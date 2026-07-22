@@ -135,8 +135,6 @@ func TestRunReturnsStatError(t *testing.T) {
 }
 
 func TestRunReturnsOpenError(t *testing.T) {
-	t.Parallel()
-
 	oldStat := statCoverageProfile
 	oldOpen := openCoverageProfile
 	t.Cleanup(func() {
