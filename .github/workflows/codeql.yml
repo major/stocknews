@@ -1,4 +1,4 @@
-name: codeql
+name: CodeQL
 
 on:
   push:
@@ -12,10 +12,16 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - go
     permissions:
       security-events: write
       contents: read
@@ -27,9 +33,9 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         with:
-          languages: go
+          languages: ${{ matrix.language }}
           build-mode: autobuild
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         with:
-          category: "/language:go"
+          category: "/language:${{ matrix.language }}"
