@@ -7,7 +7,7 @@ Real-time Alpaca stock news bot that filters Benzinga Newsdesk items and sends D
 - Run local gates before committing: `make check`.
 - Use `make coverage` to enforce aggregate Go test coverage at `>=95%`.
 - Runtime: `go run ./cmd/stocknews` or `podman compose up --build`.
-- Go toolchain: `1.24.0` from `go.mod`.
+- Go toolchain: latest Go `1.26.x` from `go.mod`/`toolchain`.
 
 ## Progressive discovery
 
@@ -25,7 +25,7 @@ Read only what you need:
 - Env vars only; Discord webhooks use plural comma-separated vars: `*_WEBHOOKS`.
 - Keep tests next to the package they cover.
 - Prefer simple structs/functions; add custom error types only when callers need to match errors.
-- Container builds use Hummingbird Go images: `registry.access.redhat.com/ubi9/go-toolset:1.24` for build, `registry.access.redhat.com/ubi9/ubi-micro` for runtime.
+- Container builds use Hummingbird Go images: `registry.access.redhat.com/hi/go:1.26-builder` for build, `registry.access.redhat.com/hi/static:latest` for runtime.
 - Keep action versions pinned to commit SHAs.
 - Use `mvdan.cc/gofumpt` for formatting and `github.com/golangci/golangci-lint/v2` for lint, including exported comment enforcement via `revive`.
 - Do not reintroduce legacy non-Go tooling.
