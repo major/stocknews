@@ -1,8 +1,7 @@
-target/
-lcov.info
 .env
 .vscode/
 .idea/
+coverage.out
 
 # deepwork scratch state (not part of repo)
 .slim/deepwork/

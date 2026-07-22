@@ -1,7 +1,3 @@
 .env
 .env.*
 .git
-target/
-**/target
-*.pyc
-__pycache__
