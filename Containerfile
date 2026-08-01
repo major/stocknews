@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/hi/go:1.26-builder@sha256:23a9a544e1c9a8d6b8aed12d671a4620c43536660f9177882cfa08cfdb850fc1 AS builder
+FROM registry.access.redhat.com/hi/go:1.26-builder@sha256:c2c7b0e204a331eb392a60cc1fcdeade8cf881f682f8370e5668c5c70d723328 AS builder
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 WORKDIR /src
