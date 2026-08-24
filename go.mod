@@ -1,6 +1,6 @@
 module github.com/major/stocknews
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/alpacahq/alpaca-trade-api-go/v3 v3.11.0
