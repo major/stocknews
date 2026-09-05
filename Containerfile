@@ -7,6 +7,6 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.commit=${GIT_SHA} -X main.buildDate=${BUILD_DATE}" -o /tmp/stocknews ./cmd/stocknews
 
-FROM registry.access.redhat.com/hi/static:latest@sha256:f4d5109b57cf7eab0a7adc566f2d78f80fa0c5ec9ccab698c9fb8eb448db6071
+FROM registry.access.redhat.com/hi/static:latest@sha256:41595122bb70793cd58c9e22f625b5c557e4459c43235cbca5c117d057a11424
 COPY --from=builder /tmp/stocknews /usr/local/bin/stocknews
 CMD ["/usr/local/bin/stocknews"]
