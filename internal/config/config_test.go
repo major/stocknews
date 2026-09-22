@@ -23,9 +23,11 @@ func TestFromEnv(t *testing.T) {
 	t.Setenv("ALPACA_API_KEY", "key")
 	t.Setenv("ALPACA_API_SECRET", "secret")
 	t.Setenv("ALPACA_NEWS_STREAM_URL", "")
+	t.Setenv("ALPACA_STOCK_STREAM_URL", "")
 	t.Setenv("STOCK_LOGO", "")
 	t.Setenv("TRANSPARENT_PNG", "")
 	unsetEnv(t, "ALPACA_NEWS_STREAM_URL")
+	unsetEnv(t, "ALPACA_STOCK_STREAM_URL")
 	unsetEnv(t, "STOCK_LOGO")
 	unsetEnv(t, "TRANSPARENT_PNG")
 	t.Setenv("DISCORD_ANALYST_WEBHOOKS", "a, b")
@@ -39,6 +41,9 @@ func TestFromEnv(t *testing.T) {
 	}
 	if settings.AlpacaNewsStreamURL != defaultNewsStreamURL || settings.StockLogo != defaultStockLogo || settings.TransparentPNG != defaultTransparent {
 		t.Fatal("defaults not applied")
+	}
+	if settings.AlpacaStockStreamURL != defaultStockStreamURL {
+		t.Fatalf("stock stream URL = %q, want %q", settings.AlpacaStockStreamURL, defaultStockStreamURL)
 	}
 	if len(settings.DiscordNewsWebhooks) != 2 || settings.DiscordNewsWebhooks[1] != "e" {
 		t.Fatalf("unexpected news webhooks: %#v", settings.DiscordNewsWebhooks)

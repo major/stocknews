@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	defaultNewsStreamURL = "wss://stream.data.alpaca.markets/v1beta1/news"
-	defaultStockLogo     = "https://static.stocktitan.net/company-logo/%s.webp"
-	defaultTransparent   = "https://major.io/transparent.png"
-	defaultBlocked       = "if you invested,you would have,would be worth"
+	defaultNewsStreamURL  = "wss://stream.data.alpaca.markets/v1beta1/news"
+	defaultStockStreamURL = "wss://stream.data.alpaca.markets/v2"
+	defaultStockLogo      = "https://static.stocktitan.net/company-logo/%s.webp"
+	defaultTransparent    = "https://major.io/transparent.png"
+	defaultBlocked        = "if you invested,you would have,would be worth"
 )
 
 // Settings stores runtime configuration loaded from the environment.
@@ -19,6 +20,7 @@ type Settings struct {
 	AlpacaAPIKey            string
 	AlpacaAPISecret         string
 	AlpacaNewsStreamURL     string
+	AlpacaStockStreamURL    string
 	DiscordAnalystWebhooks  []string
 	DiscordEarningsWebhooks []string
 	DiscordNewsWebhooks     []string
@@ -42,6 +44,7 @@ func FromEnv() (Settings, error) {
 		AlpacaAPIKey:            apiKey,
 		AlpacaAPISecret:         apiSecret,
 		AlpacaNewsStreamURL:     envString("ALPACA_NEWS_STREAM_URL", defaultNewsStreamURL),
+		AlpacaStockStreamURL:    envString("ALPACA_STOCK_STREAM_URL", defaultStockStreamURL),
 		DiscordAnalystWebhooks:  CSVValues(envString("DISCORD_ANALYST_WEBHOOKS", "")),
 		DiscordEarningsWebhooks: CSVValues(envString("DISCORD_EARNINGS_WEBHOOKS", "")),
 		DiscordNewsWebhooks:     CSVValues(envString("DISCORD_NEWS_WEBHOOKS", "")),
