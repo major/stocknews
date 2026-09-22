@@ -172,6 +172,62 @@ func TestAppRunSkipsEmptyBuiltPayload(t *testing.T) {
 	}
 }
 
+func TestDeliveryQueueReturnsErrorWhenFull(t *testing.T) {
+	t.Parallel()
+	queue := newDeliveryQueue()
+	job := deliveryJob{payload: &discord.WebhookPayload{}}
+	for range deliveryQueueCapacity {
+		if err := queue.enqueue(context.Background(), job); err != nil {
+			t.Fatalf("enqueue() error while filling queue = %v", err)
+		}
+	}
+	if err := queue.enqueue(context.Background(), job); !errors.Is(err, errDeliveryQueueFull) {
+		t.Fatalf("enqueue() error = %v, want %v", err, errDeliveryQueueFull)
+	}
+}
+
+func TestDeliveryQueueHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	queue := newDeliveryQueue()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := queue.enqueue(ctx, deliveryJob{payload: &discord.WebhookPayload{}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("enqueue() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestAppRunStopsDeliveryWorkerWhenQueueIsFull(t *testing.T) {
+	t.Parallel()
+	streamer := &fakeStreamer{
+		events:     make(chan news.Item, deliveryQueueCapacity+2),
+		terminated: make(chan error, 1),
+	}
+	sender := &blockingSender{started: make(chan struct{}, 1)}
+	app := newAppWithDeps(testSettings(), streamer, sender, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	runCh := make(chan error, 1)
+	go func() { runCh <- app.Run(context.Background()) }()
+	item := news.Item{Symbols: []string{"AAPL"}, Author: "Benzinga Newsdesk", Headline: "Apple launches product"}
+	streamer.events <- item
+	select {
+	case <-sender.started:
+	case <-time.After(time.Second):
+		t.Fatal("delivery worker did not start")
+	}
+	for range deliveryQueueCapacity + 1 {
+		streamer.events <- item
+	}
+	close(streamer.events)
+	select {
+	case err := <-runCh:
+		if !errors.Is(err, errDeliveryQueueFull) {
+			t.Fatalf("Run() error = %v, want %v", err, errDeliveryQueueFull)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not stop after queue became full")
+	}
+}
+
 type fakeStreamer struct {
 	events     chan news.Item
 	terminated chan error
@@ -191,6 +247,10 @@ type fakeSender struct {
 	err   error
 }
 
+type blockingSender struct {
+	started chan struct{}
+}
+
 type sendCall struct {
 	webhooks []string
 	payload  *discord.WebhookPayload
@@ -200,6 +260,15 @@ func (f *fakeSender) Send(_ context.Context, webhookURLs []string, payload *disc
 	copyHooks := append([]string(nil), webhookURLs...)
 	f.calls = append(f.calls, sendCall{webhooks: copyHooks, payload: payload})
 	return f.err
+}
+
+func (s *blockingSender) Send(ctx context.Context, _ []string, _ *discord.WebhookPayload) error {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func testSettings() config.Settings {
