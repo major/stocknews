@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/alpacahq/alpaca-trade-api-go/v3 v3.11.0
 	github.com/golangci/golangci-lint/v2 v2.13.2
-	mvdan.cc/gofumpt v0.11.0
+	mvdan.cc/gofumpt v0.12.0
 )
 
 require (
