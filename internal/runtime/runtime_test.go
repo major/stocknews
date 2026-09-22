@@ -1,13 +1,16 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/major/stocknews/internal/alpaca"
 	"github.com/major/stocknews/internal/config"
 	"github.com/major/stocknews/internal/discord"
 	"github.com/major/stocknews/internal/news"
@@ -124,6 +127,160 @@ func TestAppRunReturnsConnectError(t *testing.T) {
 	}
 }
 
+func TestAppRunReturnsStockConnectError(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	trades.connectErr = errors.New("no stock stream")
+	writer := &signalWriter{writes: make(chan struct{}, 1)}
+	app := newAppWithDeps(testSettings(), streamer, &fakeSender{}, slog.New(slog.NewJSONHandler(writer, nil)), trades)
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(context.Background()) }()
+	select {
+	case <-writer.writes:
+		close(streamer.events)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stock connection log")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(writer.output.Bytes(), &record); err != nil {
+		t.Fatalf("log JSON error = %v", err)
+	}
+	if record["msg"] != "failed to connect Alpaca stock stream" || record["error"] != "no stock stream" {
+		t.Fatalf("log record = %#v", record)
+	}
+}
+
+func TestAppRunProcessesNewsWhileStockConnects(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	trades.connectStarted = make(chan struct{})
+	trades.connectDone = make(chan struct{})
+	trades.blockConnect = true
+	sender := &fakeSender{}
+	app := newAppWithDeps(testSettings(), streamer, sender, slog.New(slog.NewTextHandler(io.Discard, nil)), trades)
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(context.Background()) }()
+	select {
+	case <-trades.connectStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stock connection")
+	}
+	streamer.events <- news.Item{Symbols: []string{"AAPL"}, Author: "Benzinga Newsdesk", Headline: "Apple releases new iPhone"}
+	close(streamer.events)
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	select {
+	case <-trades.connectDone:
+	case <-time.After(time.Second):
+		t.Fatal("stock connection did not stop")
+	}
+	if len(sender.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(sender.calls))
+	}
+}
+
+func TestAppRunReturnsStockTerminationError(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	trades.terminated <- errors.New("stock stream stopped")
+	err := newAppWithDeps(testSettings(), streamer, &fakeSender{}, slog.New(slog.NewTextHandler(io.Discard, nil)), trades).Run(context.Background())
+	if err == nil || err.Error() != "alpaca stock stream terminated: stock stream stopped" {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestAppRunReturnsNilWhenStockTerminationChannelCloses(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	close(trades.terminated)
+	err := newAppWithDeps(testSettings(), streamer, &fakeSender{}, slog.New(slog.NewTextHandler(io.Discard, nil)), trades).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestAppRunReturnsNilWhenStockTerminationReportsNil(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	trades.terminated <- nil
+	err := newAppWithDeps(testSettings(), streamer, &fakeSender{}, slog.New(slog.NewTextHandler(io.Discard, nil)), trades).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestAppRunReturnsNilWhenStockTradeChannelCloses(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	close(trades.trades)
+	err := newAppWithDeps(testSettings(), streamer, &fakeSender{}, slog.New(slog.NewTextHandler(io.Discard, nil)), trades).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestAppLogsStructuredTrade(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	app := newAppWithDeps(testSettings(), newFakeStreamer(), &fakeSender{}, slog.New(slog.NewJSONHandler(&output, nil)))
+	trade := alpaca.Trade{
+		Symbol:     "SPY",
+		Price:      500.25,
+		Size:       100,
+		Exchange:   "V",
+		Timestamp:  time.Date(2026, time.September, 21, 14, 30, 0, 0, time.UTC),
+		Conditions: []string{"@", "F"},
+		Tape:       "C",
+	}
+	app.logTrade(trade)
+	var record map[string]any
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+		t.Fatalf("log JSON error = %v", err)
+	}
+	if record["msg"] != "stock trade" || record["symbol"] != "SPY" || record["price"] != 500.25 || record["size"] != float64(100) || record["exchange"] != "V" || record["tape"] != "C" {
+		t.Fatalf("log record = %#v", record)
+	}
+	if record["timestamp"] != trade.Timestamp.Format(time.RFC3339Nano) {
+		t.Fatalf("timestamp = %v", record["timestamp"])
+	}
+	conditions, ok := record["conditions"].([]any)
+	if !ok || len(conditions) != 2 || conditions[0] != "@" || conditions[1] != "F" {
+		t.Fatalf("conditions = %#v", record["conditions"])
+	}
+}
+
+func TestAppRunLogsTradeEvents(t *testing.T) {
+	t.Parallel()
+	streamer := newFakeStreamer()
+	trades := newFakeTradeStreamer()
+	writer := &signalWriter{writes: make(chan struct{}, 1)}
+	app := newAppWithDeps(testSettings(), streamer, &fakeSender{}, slog.New(slog.NewJSONHandler(writer, nil)), trades)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+	trades.trades <- alpaca.Trade{Symbol: "QQQ", Price: 400, Size: 1}
+	select {
+	case <-writer.writes:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for trade log")
+	}
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func TestAppRunStopsOnContext(t *testing.T) {
 	t.Parallel()
 	streamer := newFakeStreamer()
@@ -233,6 +390,49 @@ type fakeStreamer struct {
 	terminated chan error
 	connectErr error
 }
+
+type fakeTradeStreamer struct {
+	trades         chan alpaca.Trade
+	terminated     chan error
+	connectErr     error
+	connectStarted chan struct{}
+	connectDone    chan struct{}
+	blockConnect   bool
+}
+
+type signalWriter struct {
+	writes chan struct{}
+	output bytes.Buffer
+}
+
+func (w *signalWriter) Write(value []byte) (int, error) {
+	count, err := w.output.Write(value)
+	select {
+	case w.writes <- struct{}{}:
+	default:
+	}
+	return count, err
+}
+
+func newFakeTradeStreamer() *fakeTradeStreamer {
+	return &fakeTradeStreamer{trades: make(chan alpaca.Trade, 8), terminated: make(chan error, 1)}
+}
+
+func (f *fakeTradeStreamer) Connect(ctx context.Context) error {
+	if f.connectStarted != nil {
+		close(f.connectStarted)
+	}
+	if f.blockConnect {
+		<-ctx.Done()
+		if f.connectDone != nil {
+			close(f.connectDone)
+		}
+		return ctx.Err()
+	}
+	return f.connectErr
+}
+func (f *fakeTradeStreamer) Trades() <-chan alpaca.Trade { return f.trades }
+func (f *fakeTradeStreamer) Terminated() <-chan error    { return f.terminated }
 
 func newFakeStreamer() *fakeStreamer {
 	return &fakeStreamer{events: make(chan news.Item, 8), terminated: make(chan error, 1)}

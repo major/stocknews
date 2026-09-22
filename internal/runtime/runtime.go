@@ -16,10 +16,11 @@ import (
 	"github.com/major/stocknews/internal/news"
 )
 
-// App wires the news stream to Discord delivery.
+// App wires Alpaca streams to Discord delivery and structured logging.
 type App struct {
 	settings config.Settings
 	streamer alpaca.Streamer
+	trades   alpaca.TradeStreamer
 	sender   webhookSender
 	logger   *slog.Logger
 }
@@ -69,25 +70,42 @@ func NewApp(settings config.Settings, client *http.Client, logger *slog.Logger) 
 	return &App{
 		settings: settings,
 		streamer: alpaca.NewStreamer(settings),
+		trades:   alpaca.NewTradeStreamer(settings),
 		sender:   discord.NewSender(client),
 		logger:   logger,
 	}
 }
 
-func newAppWithDeps(settings config.Settings, streamer alpaca.Streamer, sender webhookSender, logger *slog.Logger) *App {
+func newAppWithDeps(settings config.Settings, streamer alpaca.Streamer, sender webhookSender, logger *slog.Logger, tradeStreamers ...alpaca.TradeStreamer) *App {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &App{settings: settings, streamer: streamer, sender: sender, logger: logger}
+	var trades alpaca.TradeStreamer
+	if len(tradeStreamers) > 0 {
+		trades = tradeStreamers[0]
+	}
+	return &App{settings: settings, streamer: streamer, trades: trades, sender: sender, logger: logger}
 }
 
 // Run starts the stream, processes incoming items, and stops when the context ends or the stream terminates.
 func (a *App) Run(ctx context.Context) (runErr error) {
-	if err := a.streamer.Connect(ctx); err != nil {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	tradeConnectDone := (<-chan error)(nil)
+	if a.trades != nil {
+		connectDone := make(chan error, 1)
+		tradeConnectDone = connectDone
+		go func() {
+			connectDone <- a.trades.Connect(runCtx)
+		}()
+	}
+
+	if err := a.streamer.Connect(runCtx); err != nil {
 		return fmt.Errorf("connect Alpaca news stream: %w", err)
 	}
 	queue := newDeliveryQueue()
-	workerCtx, cancelWorker := context.WithCancel(ctx)
+	workerCtx, cancelWorker := context.WithCancel(runCtx)
 	workerDone := make(chan struct{})
 	go a.runDeliveryWorker(workerCtx, queue, workerDone)
 	defer func() {
@@ -98,6 +116,8 @@ func (a *App) Run(ctx context.Context) (runErr error) {
 		<-workerDone
 		cancelWorker()
 	}()
+	tradeEvents := (<-chan alpaca.Trade)(nil)
+	tradeTerminated := (<-chan error)(nil)
 	for {
 		select {
 		case <-ctx.Done():
@@ -114,8 +134,40 @@ func (a *App) Run(ctx context.Context) (runErr error) {
 			if err := a.processItem(ctx, item, queue); err != nil {
 				return fmt.Errorf("enqueue Discord delivery: %w", err)
 			}
+		case err, ok := <-tradeConnectDone:
+			tradeConnectDone = nil
+			if !ok || err != nil {
+				if err != nil {
+					a.logger.Warn("failed to connect Alpaca stock stream", "error", err)
+				}
+				continue
+			}
+			tradeEvents = a.trades.Trades()
+			tradeTerminated = a.trades.Terminated()
+		case err, ok := <-tradeTerminated:
+			if !ok || err == nil {
+				return nil
+			}
+			return fmt.Errorf("alpaca stock stream terminated: %w", err)
+		case trade, ok := <-tradeEvents:
+			if !ok {
+				return nil
+			}
+			a.logTrade(trade)
 		}
 	}
+}
+
+func (a *App) logTrade(trade alpaca.Trade) {
+	a.logger.Info("stock trade",
+		"symbol", trade.Symbol,
+		"price", trade.Price,
+		"size", trade.Size,
+		"exchange", trade.Exchange,
+		"timestamp", trade.Timestamp,
+		"conditions", trade.Conditions,
+		"tape", trade.Tape,
+	)
 }
 
 func (a *App) processItem(ctx context.Context, item news.Item, queue *deliveryQueue) error {
