@@ -9,6 +9,7 @@ Pick apart stock news from Alpaca to make relevant Discord alerts. 🤓
 | `ALPACA_API_KEY` | Yes | — | Alpaca API key |
 | `ALPACA_API_SECRET` | Yes | — | Alpaca API secret |
 | `ALPACA_NEWS_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v1beta1/news` | Alpaca news WebSocket URL |
+| `ALPACA_STOCK_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v2` | Alpaca stock WebSocket URL for IEX trades |
 | `DISCORD_ANALYST_WEBHOOKS` | No | — | Comma-separated Discord webhook URLs for analyst ratings |
 | `DISCORD_EARNINGS_WEBHOOKS` | No | — | Comma-separated Discord webhook URLs for earnings |
 | `DISCORD_NEWS_WEBHOOKS` | No | — | Comma-separated Discord webhook URLs for general news |
