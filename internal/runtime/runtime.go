@@ -3,6 +3,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -21,6 +22,39 @@ type App struct {
 	streamer alpaca.Streamer
 	sender   webhookSender
 	logger   *slog.Logger
+}
+
+const deliveryQueueCapacity = 16
+
+var errDeliveryQueueFull = errors.New("discord delivery queue is full")
+
+type deliveryJob struct {
+	webhookURLs []string
+	payload     *discord.WebhookPayload
+	kind        news.Kind
+	symbol      string
+}
+
+type deliveryQueue struct {
+	jobs chan deliveryJob
+}
+
+func newDeliveryQueue() *deliveryQueue {
+	return &deliveryQueue{jobs: make(chan deliveryJob, deliveryQueueCapacity)}
+}
+
+func (q *deliveryQueue) enqueue(ctx context.Context, job deliveryJob) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	select {
+	case q.jobs <- job:
+		return nil
+	default:
+		return errDeliveryQueueFull
+	}
 }
 
 type webhookSender interface {
@@ -48,10 +82,22 @@ func newAppWithDeps(settings config.Settings, streamer alpaca.Streamer, sender w
 }
 
 // Run starts the stream, processes incoming items, and stops when the context ends or the stream terminates.
-func (a *App) Run(ctx context.Context) error {
+func (a *App) Run(ctx context.Context) (runErr error) {
 	if err := a.streamer.Connect(ctx); err != nil {
 		return fmt.Errorf("connect Alpaca news stream: %w", err)
 	}
+	queue := newDeliveryQueue()
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go a.runDeliveryWorker(workerCtx, queue, workerDone)
+	defer func() {
+		if runErr != nil {
+			cancelWorker()
+		}
+		close(queue.jobs)
+		<-workerDone
+		cancelWorker()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -65,20 +111,22 @@ func (a *App) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			a.processItem(ctx, item)
+			if err := a.processItem(ctx, item, queue); err != nil {
+				return fmt.Errorf("enqueue Discord delivery: %w", err)
+			}
 		}
 	}
 }
 
-func (a *App) processItem(ctx context.Context, item news.Item) {
+func (a *App) processItem(ctx context.Context, item news.Item, queue *deliveryQueue) error {
 	item.Headline = html.UnescapeString(item.Headline)
 	if earnings.HasBlockedPhrases(item.Headline, a.settings.BlockedPhrases) {
 		a.logger.Info("skipping news item", "reason", "blocked_phrase", "headline", item.Headline, "author", item.Author, "symbols", item.Symbols)
-		return
+		return nil
 	}
 	if reason, skip := news.Reason(item); skip {
 		a.logger.Info("skipping news item", "reason", reason, "headline", item.Headline, "author", item.Author, "symbols", item.Symbols)
-		return
+		return nil
 	}
 	symbol, _ := news.AcceptedSymbol(item)
 	kind, _ := news.Classify(item)
@@ -99,9 +147,29 @@ func (a *App) processItem(ctx context.Context, item news.Item) {
 		webhooks = a.settings.DiscordNewsWebhooks
 	}
 	if !built {
-		return
+		return nil
 	}
-	if err := a.sender.Send(ctx, webhooks, payload); err != nil {
-		a.logger.Warn("failed to send Discord webhook", "error", err, "kind", kind, "symbol", symbol)
+	return queue.enqueue(ctx, deliveryJob{
+		webhookURLs: append([]string(nil), webhooks...),
+		payload:     payload,
+		kind:        kind,
+		symbol:      symbol,
+	})
+}
+
+func (a *App) runDeliveryWorker(ctx context.Context, queue *deliveryQueue, done chan<- struct{}) {
+	defer close(done)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-queue.jobs:
+			if !ok {
+				return
+			}
+			if err := a.sender.Send(ctx, job.webhookURLs, job.payload); err != nil {
+				a.logger.Warn("failed to send Discord webhook", "error", err, "kind", job.kind, "symbol", job.symbol)
+			}
+		}
 	}
 }
