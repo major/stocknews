@@ -18,7 +18,7 @@ import httpx2
 import pytest
 from httpx2.websockets import ASGIWebSocketTransport
 
-from stocknews.__main__ import main, run_application
+from stocknews.__main__ import _cancel_and_wait, main, run_application
 from stocknews.alpaca import AlpacaStreamError, StreamHandle
 from stocknews.models import AlpacaSettings, Config, Trade
 
@@ -872,6 +872,41 @@ def test_cli_logs_sanitized_failure_without_secret_bearing_exception_chain(
     assert failure_record.error == "sanitized startup failure"
     assert DUMMY_FAILURE_API_SECRET not in caplog.text
     assert "Traceback" not in caplog.text
+
+
+def test_cancel_and_wait_preserves_mixed_base_exception_group() -> None:
+    """Verify cancellation waits preserve all children of a mixed exception group."""
+
+    async def scenario() -> None:
+        ordinary_error = ValueError("startup task failed")
+        mixed_errors: list[BaseExceptionGroup] = []
+        task_started = asyncio.Event()
+
+        async def fail_with_mixed_group_when_cancelled() -> None:
+            task_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as cancellation_error:
+                mixed_error = BaseExceptionGroup(
+                    "mixed startup failure",
+                    [ordinary_error, cancellation_error],
+                )
+                mixed_errors.append(mixed_error)
+                raise mixed_error
+
+        task = asyncio.create_task(fail_with_mixed_group_when_cancelled())
+        await task_started.wait()
+
+        with pytest.raises(BaseExceptionGroup) as error:
+            await _cancel_and_wait(task)
+
+        assert len(mixed_errors) == 1
+        assert error.value is mixed_errors[0]
+        assert error.value.exceptions[0] is ordinary_error
+        assert isinstance(error.value.exceptions[1], asyncio.CancelledError)
+        assert task.exception() is mixed_errors[0]
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(

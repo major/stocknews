@@ -121,7 +121,8 @@ async def _deliver(
                 return
             try:
                 await send_payload(client, job.webhooks, job.payload)
-            except Exception as error:
+            # Keep per-webhook failures local; cancellation still propagates.
+            except Exception as error:  # noqa: BLE001
                 logger.warning(
                     "failed to send Discord webhook",
                     extra={"error": str(error), "kind": job.kind, "symbol": job.symbol},
@@ -146,15 +147,14 @@ async def _settle_task(
             if cancelled and on_interruption is not None:
                 on_interruption()
             continue
-        except Exception:
+        # Preserve mixed BaseExceptionGroups while draining ordinary task errors.
+        except Exception:  # noqa: BLE001
             break
     try:
-        task.result()
-    except Exception as task_error:
-        return interrupted, task_error
-    except BaseException:
+        task_error = task.exception()
+    except asyncio.CancelledError:
         return interrupted, None
-    return interrupted, None
+    return interrupted, task_error if isinstance(task_error, Exception) else None
 
 
 async def _close_iterator[T](stream: AsyncIterator[T]) -> None:
@@ -169,16 +169,19 @@ def _accept_stock_connection(state: _RunState, completed: set[asyncio.Task[objec
 
     connection = state.stock_connection
     state.stock_connection = None
-    try:
-        connected_stock = connection.result()
-    except Exception as error:
+    if connection.cancelled():
+        connection.result()
+    connection_error = connection.exception()
+    if isinstance(connection_error, Exception):
         logger.warning(
             "failed to connect Alpaca stock stream",
-            extra={"error": str(error)},
+            extra={"error": str(connection_error)},
         )
-    else:
-        state.stock_iterator = aiter(connected_stock)
-        state.stock_read = asyncio.create_task(_next(state.stock_iterator))
+        return
+
+    connected_stock = connection.result()
+    state.stock_iterator = aiter(connected_stock)
+    state.stock_read = asyncio.create_task(_next(state.stock_iterator))
 
 
 def _process_news_read(

@@ -47,7 +47,8 @@ async def _cancel_and_wait[T](task: asyncio.Task[T]) -> None:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             continue
-        except Exception:
+        # Preserve mixed BaseExceptionGroups while draining ordinary task errors.
+        except Exception:  # noqa: BLE001
             break
     with suppress(BaseException):
         task.result()

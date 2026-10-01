@@ -274,11 +274,13 @@ async def _read_connection[EventT](
                 if not started.done():
                     started.set_result(None)
                 await _read_events(config, websocket, stop_event, events, pending_messages)
-            except Exception as error:
+            # Classify all ordinary protocol failures before context exit wraps them.
+            except Exception as error:  # noqa: BLE001
                 return _failure_outcome(config, "stream protocol", error, started.done())
             else:
                 return _STOPPED
-    except Exception as error:
+    # Context entry and exit can fail with arbitrary ordinary exception groups.
+    except Exception as error:  # noqa: BLE001
         return _failure_outcome(config, "connection", error, started.done())
 
 

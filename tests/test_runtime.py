@@ -16,7 +16,7 @@ from httpx2.websockets import ASGIWebSocketTransport
 from stocknews.__main__ import run_application
 from stocknews.logging import JSONFormatter, configure_logging
 from stocknews.models import Config, NewsItem, Trade
-from stocknews.runtime import run
+from stocknews.runtime import _settle_task, run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
@@ -724,6 +724,68 @@ def test_stock_connection_failure_warns_while_news_continues() -> None:
             for record in records
         )
         assert _payload_title(sent[0]) == "MSFT: Microsoft announces a new Surface"
+
+    asyncio.run(scenario())
+
+
+def test_settle_task_preserves_mixed_base_exception_group() -> None:
+    """Verify waiting for a stream task preserves mixed exception groups."""
+
+    async def scenario() -> None:
+        ordinary_error = ValueError("stream failed")
+        cancellation_error = asyncio.CancelledError("stream cancelled")
+        mixed_error = BaseExceptionGroup("mixed stream failure", [ordinary_error, cancellation_error])
+        release_failure = asyncio.Event()
+        task_started = asyncio.Event()
+
+        async def fail_after_release() -> None:
+            task_started.set()
+            await release_failure.wait()
+            raise mixed_error
+
+        task = asyncio.create_task(fail_after_release())
+        await task_started.wait()
+        settling_started = asyncio.Event()
+
+        async def settle_started_task() -> tuple[bool, Exception | None]:
+            settling_started.set()
+            return await _settle_task(task)
+
+        settling = asyncio.create_task(settle_started_task())
+        await settling_started.wait()
+        release_failure.set()
+
+        with pytest.raises(BaseExceptionGroup) as error:
+            await settling
+
+        assert error.value is mixed_error
+        assert error.value.exceptions == (ordinary_error, cancellation_error)
+        assert task.exception() is mixed_error
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_stock_connection_preserves_original_message() -> None:
+    """Verify a cancelled stock connection propagates its cancellation reason."""
+
+    async def scenario() -> None:
+        cancellation_message = "stock connection stopped before connecting"
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            async def events() -> AsyncIterator[NewsItem]:
+                await asyncio.Event().wait()
+                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
+
+            return events()
+
+        async def connect_stock() -> AsyncIterable[Trade]:
+            raise asyncio.CancelledError(cancellation_message)
+
+        async with httpx2.AsyncClient() as client:
+            with pytest.raises(asyncio.CancelledError) as error:
+                await run(_config(), client, _logger(StringIO()), connect_news, connect_stock)
+
+        assert str(error.value) == cancellation_message
 
     asyncio.run(scenario())
 
