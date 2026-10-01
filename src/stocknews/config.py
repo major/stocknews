@@ -37,5 +37,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
 def _required_env(environ: Mapping[str, str], key: str) -> str:
     value = environ.get(key)
     if value is None or not value.strip():
-        raise ValueError(f"{key} is required")
+        error_message = f"{key} is required"
+        raise ValueError(error_message)
     return value

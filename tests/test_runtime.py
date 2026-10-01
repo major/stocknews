@@ -34,7 +34,8 @@ class _RoutedTransport(httpx2.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         transport = self._routes.get(request.url.host)
         if transport is None:
-            raise AssertionError(f"unexpected request host: {request.url.host}")
+            unexpected_host_message = f"unexpected request host: {request.url.host}"
+            raise AssertionError(unexpected_host_message)
         return await transport.handle_async_request(request)
 
     async def aclose(self) -> None:
@@ -591,7 +592,8 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
         logs = StringIO()
 
         async def unused_discord_handler(_request: httpx2.Request) -> httpx2.Response:
-            raise AssertionError("terminal stream errors must not send Discord messages")
+            unused_discord_message = "terminal stream errors must not send Discord messages"
+            raise AssertionError(unused_discord_message)
 
         config = replace(
             _config(),
@@ -691,6 +693,7 @@ def test_stock_connection_failure_warns_while_news_continues() -> None:
         stock_started = asyncio.Event()
         output = StringIO()
         sent: list[dict[str, object]] = []
+        stock_connection_error = "stock stream unavailable"
 
         async def handler(request: httpx2.Request) -> httpx2.Response:
             sent.append(json.loads(request.content))
@@ -698,7 +701,7 @@ def test_stock_connection_failure_warns_while_news_continues() -> None:
 
         async def connect_stock() -> AsyncIterable[Trade]:
             stock_started.set()
-            raise ConnectionError("stock stream unavailable")
+            raise ConnectionError(stock_connection_error)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
             await stock_started.wait()
@@ -717,7 +720,7 @@ def test_stock_connection_failure_warns_while_news_continues() -> None:
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
         assert any(
-            record["msg"] == "failed to connect Alpaca stock stream" and record["error"] == "stock stream unavailable"
+            record["msg"] == "failed to connect Alpaca stock stream" and record["error"] == stock_connection_error
             for record in records
         )
         assert _payload_title(sent[0]) == "MSFT: Microsoft announces a new Surface"
@@ -773,6 +776,7 @@ def test_established_stock_stream_failure_is_fatal_and_trade_is_logged() -> None
     async def scenario() -> None:
         output = StringIO()
         never = asyncio.Event()
+        stock_failure_message = "stock stream stopped"
 
         async def connect_news() -> AsyncIterable[NewsItem]:
             async def events() -> AsyncIterable[NewsItem]:
@@ -792,12 +796,12 @@ def test_established_stock_stream_failure_is_fatal_and_trade_is_logged() -> None
                     conditions=("@", "F"),
                     tape="C",
                 )
-                raise ConnectionError("stock stream stopped")
+                raise ConnectionError(stock_failure_message)
 
             return events()
 
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda request: httpx2.Response(204))) as client:
-            with pytest.raises(RuntimeError, match="alpaca stock stream terminated: stock stream stopped"):
+            with pytest.raises(RuntimeError, match=f"alpaca stock stream terminated: {stock_failure_message}"):
                 await run(_config(), client, _logger(output), connect_news, connect_stock)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -827,6 +831,7 @@ def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> No
         release_second_news = asyncio.Event()
         news_iterator_closed = asyncio.Event()
         news_iterators: list[AsyncGenerator[NewsItem]] = []
+        stock_failure_message = "stock stream stopped"
 
         async def handler(_request: httpx2.Request) -> httpx2.Response:
             first_delivery_started.set()
@@ -861,12 +866,12 @@ def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> No
                 if release_second_news.is_set():
                     yield Trade(symbol="SPY", price=0, size=0)
                     return
-                raise ConnectionError("stock stream stopped")
+                raise ConnectionError(stock_failure_message)
 
             return events()
 
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            with pytest.raises(RuntimeError, match="alpaca stock stream terminated: stock stream stopped"):
+            with pytest.raises(RuntimeError, match=f"alpaca stock stream terminated: {stock_failure_message}"):
                 await run(_config(), client, _logger(StringIO()), connect_news, connect_stock)
 
         try:
@@ -927,6 +932,16 @@ def test_webhook_fanout_continues_after_failure() -> None:
     asyncio.run(scenario())
 
 
+def _raise_webhook_request_error_for_redaction(webhook_url: str) -> None:
+    """Raise a request error containing a fake webhook URL for traceback redaction.
+
+    Args:
+        webhook_url: Fake URL intentionally included in the exception message.
+    """
+    error_message = f"HTTP request failed for {webhook_url}"
+    raise RuntimeError(error_message)
+
+
 def test_webhook_logs_redact_urls_from_library_and_structured_records() -> None:
     """Verify webhook URLs are redacted in library and structured logs."""
     output = StringIO()
@@ -943,7 +958,7 @@ def test_webhook_logs_redact_urls_from_library_and_structured_records() -> None:
         library_logger.warning("HTTP transport warning for %s", failed_webhook)
         library_logger.warning("HTTP transport warning for %s", quoted_webhook)
         try:
-            raise RuntimeError(f"HTTP request failed for {quoted_webhook}")
+            _raise_webhook_request_error_for_redaction(quoted_webhook)
         except RuntimeError:
             library_logger.exception("HTTP request exception")
         logger.warning(
@@ -1178,6 +1193,7 @@ def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
     async def scenario() -> None:
         stock_connected = asyncio.Event()
         stock_closed = asyncio.Event()
+        cleanup_error_message = "private stream credential"
 
         class NewsStream:
             def __aiter__(self) -> AsyncIterator[NewsItem]:
@@ -1187,7 +1203,7 @@ def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
                 raise StopAsyncIteration
 
             async def aclose(self) -> None:
-                raise OSError("private stream credential")
+                raise OSError(cleanup_error_message)
 
         class StockStream:
             def __aiter__(self) -> AsyncIterator[Trade]:
@@ -1216,7 +1232,7 @@ def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
         close_failure = next(record for record in records if record["msg"] == "failed to close Alpaca news stream")
         assert close_failure["error"] == "OSError"
         assert close_failure["stream"] == "news"
-        assert "private stream credential" not in output.getvalue()
+        assert cleanup_error_message not in output.getvalue()
         assert stock_closed.is_set()
 
     asyncio.run(scenario())
@@ -1274,6 +1290,8 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
     async def scenario() -> None:
         news_iterator_closed = asyncio.Event()
         never = asyncio.Event()
+        cleanup_error_message = "private stream credential"
+        stock_failure_message = "stock stream stopped"
 
         async def connect_news() -> AsyncIterable[NewsItem]:
             async def events() -> AsyncIterable[NewsItem]:
@@ -1286,21 +1304,21 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
                     )
                 finally:
                     news_iterator_closed.set()
-                    raise OSError("private stream credential")
+                    raise OSError(cleanup_error_message)
 
             return events()
 
         async def connect_stock() -> AsyncIterable[Trade]:
             async def events() -> AsyncIterable[Trade]:
                 yield Trade(symbol="SPY", price=500.25, size=100)
-                raise ConnectionError("stock stream stopped")
+                raise ConnectionError(stock_failure_message)
 
             return events()
 
         logger = _logger(StringIO())
         logger.addHandler(caplog.handler)
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _request: httpx2.Response(204))) as client:
-            with pytest.raises(RuntimeError, match="alpaca stock stream terminated: stock stream stopped"):
+            with pytest.raises(RuntimeError, match=f"alpaca stock stream terminated: {stock_failure_message}"):
                 await run(_config(), client, logger, connect_news, connect_stock)
 
         assert news_iterator_closed.is_set()
@@ -1310,7 +1328,7 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
         assert len(cleanup_logs) == 1
         assert cleanup_logs[0].error == "OSError"
         assert cleanup_logs[0].stream == "news"
-        assert "private stream credential" not in caplog.text
+        assert cleanup_error_message not in caplog.text
 
     asyncio.run(scenario())
 

@@ -165,14 +165,16 @@ async def _run() -> None:
     try:
         config = load_config(os.environ)
     except ValueError as error:
-        logger.error("invalid configuration", extra={"error": str(error)})
+        # Raw exception chains may carry Alpaca credentials; JSON logging only redacts webhooks.
+        logger.exception("invalid configuration", extra={"error": str(error)}, exc_info=False)
         raise SystemExit(2) from error
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     task = asyncio.current_task()
     if task is None:
-        raise RuntimeError("stocknews startup has no active task")
+        error_message = "stocknews startup has no active task"
+        raise RuntimeError(error_message)
 
     def request_shutdown() -> None:
         stop_event.set()
@@ -198,7 +200,8 @@ def main() -> None:
     except KeyboardInterrupt:
         return
     except Exception as error:
-        logging.getLogger("stocknews").error("stocknews failed", extra={"error": str(error)})
+        # Raw exception chains may carry Alpaca credentials; JSON logging only redacts webhooks.
+        logging.getLogger("stocknews").exception("stocknews failed", extra={"error": str(error)}, exc_info=False)
         raise SystemExit(1) from error
 
 

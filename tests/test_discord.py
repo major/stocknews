@@ -224,6 +224,7 @@ def test_send_payload_isolates_failures_and_sanitizes_errors() -> None:
         "network-secret": "network",
         "success": "success",
     }
+    network_failure_message = "network failed"
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
         endpoint = request.url.path.rsplit("/", maxsplit=1)[-1]
@@ -231,7 +232,7 @@ def test_send_payload_isolates_failures_and_sanitizes_errors() -> None:
         if endpoint == "status-secret":
             return httpx2.Response(503)
         if endpoint == "network-secret":
-            raise httpx2.ConnectError("network failed", request=request)
+            raise httpx2.ConnectError(network_failure_message, request=request)
         return httpx2.Response(204)
 
     async def run() -> str:
@@ -316,13 +317,14 @@ def test_send_payload_serializes_before_sending() -> None:
 
 def test_send_payload_does_not_hide_programming_errors() -> None:
     """Propagate unexpected errors raised by the transport handler."""
+    transport_handler_error_message = "transport handler bug"
 
     async def handler(_request: httpx2.Request) -> httpx2.Response:
-        raise ValueError("transport handler bug")
+        raise ValueError(transport_handler_error_message)
 
     async def run() -> None:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-            with pytest.raises(ValueError, match="transport handler bug"):
+            with pytest.raises(ValueError, match=transport_handler_error_message):
                 await send_payload(
                     client,
                     ["https://discord.test/webhook"],

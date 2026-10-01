@@ -273,9 +273,10 @@ async def _read_connection(
                 if not started.done():
                     started.set_result(None)
                 await _read_events(config, websocket, stop_event, events, pending_messages)
-                return _STOPPED
             except Exception as error:
                 return _failure_outcome(config, "stream protocol", error, started.done())
+            else:
+                return _STOPPED
     except Exception as error:
         return _failure_outcome(config, "connection", error, started.done())
 
@@ -303,16 +304,15 @@ async def _wait_for_ack(
     stage: str,
 ) -> list[dict[str, object]] | None:
     deadline = asyncio.get_running_loop().time() + ACK_TIMEOUT_SECONDS
+    timeout_message = f"Alpaca {config.stream_name} stream timed out waiting for {stage} acknowledgement"
     while not stop_event.is_set():
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
-            raise AlpacaStreamError(f"Alpaca {config.stream_name} stream timed out waiting for {stage} acknowledgement")
+            raise AlpacaStreamError(timeout_message)
         try:
             payload = await websocket.receive_json(timeout=remaining)
         except TimeoutError as error:
-            raise AlpacaStreamError(
-                f"Alpaca {config.stream_name} stream timed out waiting for {stage} acknowledgement"
-            ) from error
+            raise AlpacaStreamError(timeout_message) from error
         messages = _message_objects(payload)
         for index, message in enumerate(messages):
             message_type = message.get("T")
@@ -330,9 +330,8 @@ async def _wait_for_ack(
                 if isinstance(acknowledged, list) and all(isinstance(symbol, str) for symbol in acknowledged):
                     if set(config.symbols).issubset(acknowledged):
                         return messages[:index] + messages[index + 1 :]
-                raise AlpacaStreamError(
-                    f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
-                )
+                detail = f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
+                raise AlpacaStreamError(detail)
     return None
 
 
@@ -350,7 +349,8 @@ async def _read_events(
             try:
                 payload = await websocket.receive_json(timeout=None)
             except json.JSONDecodeError as error:
-                raise AlpacaStreamError(f"Alpaca {config.stream_name} stream received invalid JSON") from error
+                error_message = f"Alpaca {config.stream_name} stream received invalid JSON"
+                raise AlpacaStreamError(error_message) from error
             messages = _message_objects(payload)
         for message in messages:
             if message.get("T") == "error":
@@ -399,7 +399,8 @@ def _message_objects(payload: object) -> list[dict[str, object]]:
     messages: list[dict[str, object]] = []
     for value in values:
         if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-            raise AlpacaStreamError("Alpaca stream sent a message with an invalid shape")
+            message = "Alpaca stream sent a message with an invalid shape"
+            raise AlpacaStreamError(message)
         messages.append(cast("dict[str, object]", value))
     return messages
 
@@ -422,9 +423,11 @@ def _parse_trade(message: dict[str, object]) -> Trade | None:
     price = message.get("p", 0)
     size = message.get("s", 0)
     if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
-        raise AlpacaStreamError("Alpaca trades stream sent an invalid price")
+        error_message = "Alpaca trades stream sent an invalid price"
+        raise AlpacaStreamError(error_message)
     if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= UINT32_MAX:
-        raise AlpacaStreamError("Alpaca trades stream sent an invalid size")
+        error_message = "Alpaca trades stream sent an invalid size"
+        raise AlpacaStreamError(error_message)
     return Trade(
         symbol=_text(message, "S", "trades"),
         price=float(price),
@@ -439,14 +442,16 @@ def _parse_trade(message: dict[str, object]) -> Trade | None:
 def _text(message: dict[str, object], field: str, stream_name: str) -> str:
     value = message.get(field, "")
     if not isinstance(value, str):
-        raise AlpacaStreamError(f"Alpaca {stream_name} stream sent an invalid {field} field")
+        error_message = f"Alpaca {stream_name} stream sent an invalid {field} field"
+        raise AlpacaStreamError(error_message)
     return value
 
 
 def _text_tuple(message: dict[str, object], field: str, stream_name: str) -> tuple[str, ...]:
     value = message.get(field, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise AlpacaStreamError(f"Alpaca {stream_name} stream sent an invalid {field} field")
+        error_message = f"Alpaca {stream_name} stream sent an invalid {field} field"
+        raise AlpacaStreamError(error_message)
     return tuple(value)
 
 

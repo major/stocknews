@@ -305,7 +305,8 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
             receive: Callable[..., Awaitable[dict[str, object]]],
             send: Callable[..., Awaitable[None]],
         ) -> None:
-            raise AssertionError("the failing transport must reject the connection before the ASGI app runs")
+            message = "the failing transport must reject the connection before the ASGI app runs"
+            raise AssertionError(message)
 
         class FailingTransport(ASGIWebSocketTransport):
             async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
@@ -808,7 +809,8 @@ class _LoopbackServer:
         results = await asyncio.gather(*self._tasks, return_exceptions=True)
         errors = [result for result in results if isinstance(result, Exception) and not isinstance(result, OSError)]
         if errors:
-            raise ExceptionGroup("loopback WebSocket server handler failed", errors)
+            message = "loopback WebSocket server handler failed"
+            raise ExceptionGroup(message, errors)
 
     def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.create_task(self._serve(reader, writer))

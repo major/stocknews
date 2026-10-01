@@ -190,7 +190,8 @@ def _process_news_read(
     try:
         message = state.news_read.result()
     except Exception as error:
-        raise RuntimeError(f"alpaca news stream terminated: {error}") from error
+        error_message = f"alpaca news stream terminated: {error}"
+        raise RuntimeError(error_message) from error
     if isinstance(message, _StreamEnded):
         return True
 
@@ -199,9 +200,11 @@ def _process_news_read(
         try:
             state.jobs.put_nowait(delivery)
         except asyncio.QueueFull as error:
-            raise RuntimeError("Discord delivery queue is full") from error
+            error_message = "Discord delivery queue is full"
+            raise RuntimeError(error_message) from error
     if state.news_iterator is None:
-        raise RuntimeError("news stream read completed without an active iterator")
+        error_message = "news stream read completed without an active iterator"
+        raise RuntimeError(error_message)
     state.news_read = asyncio.create_task(_next(state.news_iterator))
     return False
 
@@ -217,7 +220,8 @@ def _process_stock_read(
     try:
         trade_message = state.stock_read.result()
     except Exception as error:
-        raise RuntimeError(f"alpaca stock stream terminated: {error}") from error
+        error_message = f"alpaca stock stream terminated: {error}"
+        raise RuntimeError(error_message) from error
     if isinstance(trade_message, _StreamEnded):
         return True
 
@@ -234,7 +238,8 @@ def _process_stock_read(
         },
     )
     if state.stock_iterator is None:
-        raise RuntimeError("stock stream read completed without an active iterator")
+        error_message = "stock stream read completed without an active iterator"
+        raise RuntimeError(error_message)
     state.stock_read = asyncio.create_task(_next(state.stock_iterator))
     return False
 
@@ -242,7 +247,8 @@ def _process_stock_read(
 async def _pump_streams(state: _RunState, config: Config, logger: logging.Logger) -> None:
     while True:
         if state.news_read is None:
-            raise RuntimeError("news stream read task is unavailable while pumping streams")
+            error_message = "news stream read task is unavailable while pumping streams"
+            raise RuntimeError(error_message)
         waiting: set[asyncio.Task[object]] = {cast("asyncio.Task[object]", state.news_read)}
         if state.stock_read is not None:
             waiting.add(cast("asyncio.Task[object]", state.stock_read))
@@ -358,7 +364,8 @@ async def run(
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            raise RuntimeError(f"connect Alpaca news stream: {error}") from error
+            error_message = f"connect Alpaca news stream: {error}"
+            raise RuntimeError(error_message) from error
 
         state.news_iterator = aiter(connected_news)
         state.news_read = asyncio.create_task(_next(state.news_iterator))
@@ -366,7 +373,5 @@ async def run(
 
         await _pump_streams(state, config, logger)
         normal_completion = True
-    except asyncio.CancelledError:
-        raise
     finally:
         await _shutdown(state, logger, normal_completion=normal_completion)

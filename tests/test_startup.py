@@ -845,6 +845,32 @@ def test_startup_logs_commit_before_missing_configuration(
     assert records[1]["error"] == "ALPACA_API_KEY is required"
 
 
+def test_cli_logs_sanitized_failure_without_secret_bearing_exception_chain(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify startup logs omit secrets and tracebacks from raw exception chains."""
+
+    def fail_to_run(coroutine) -> None:
+        """Raise a sanitized runner failure after closing its supplied coroutine."""
+        coroutine.close()
+        cause = RuntimeError(DUMMY_FAILURE_API_SECRET)
+        error_message = "sanitized startup failure"
+        raise RuntimeError(error_message) from cause
+
+    monkeypatch.setattr("stocknews.__main__.asyncio.run", fail_to_run)
+
+    with caplog.at_level(logging.ERROR, logger="stocknews"), pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 1
+    failure_record = next(record for record in caplog.records if record.name == "stocknews")
+    assert failure_record.getMessage() == "stocknews failed"
+    assert failure_record.error == "sanitized startup failure"
+    assert DUMMY_FAILURE_API_SECRET not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("stock_completion", "expect_trade"),
     [
