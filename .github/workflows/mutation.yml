@@ -1,0 +1,102 @@
+name: Mutation pilot
+
+on:
+  schedule:
+    - cron: "17 5 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    name: Earnings mutation pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Install uv and sync locked environment
+        run: |
+          python3 -m pip install --user --disable-pip-version-check "uv==0.12.18"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+          export PATH="$(python3 -m site --user-base)/bin:$PATH"
+          uv python install
+          uv sync --locked
+
+      - name: Run mutmut
+        run: |
+          set -o pipefail
+          uv run --locked mutmut run --max-children 2 2>&1 | tee mutmut-run.log
+        shell: bash
+
+      - name: List mutation results
+        if: ${{ always() && !cancelled() }}
+        run: |
+          set -o pipefail
+          uv run --locked mutmut results --all true 2>&1 | tee mutmut-results.txt
+        shell: bash
+
+      - name: Export CI statistics
+        if: ${{ always() && !cancelled() }}
+        run: |
+          set -o pipefail
+          uv run --locked mutmut export-cicd-stats 2>&1 | tee mutmut-export.log
+        shell: bash
+
+      - name: Add mutation summary
+        if: ${{ always() && !cancelled() }}
+        run: |
+          stats="mutants/mutmut-cicd-stats.json"
+          if [[ ! -s "$stats" ]]; then
+            {
+              echo "## Mutmut weekly pilot"
+              echo "Stats are unavailable. Check setup and mutmut report step logs."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! jq -e 'type == "object" and (.total | type) == "number" and (.killed | type) == "number" and (.survived | type) == "number"' "$stats" >/dev/null; then
+            echo "Mutmut stats exist but do not match the expected report schema." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          {
+            echo "## Mutmut weekly pilot"
+            jq -r '
+              "- Mutants: \(.total)",
+              "- Killed: \(.killed)",
+              "- Survivors: \(.survived)",
+              "- No tests: \(.no_tests // 0)",
+              "- Skipped: \(.skipped // 0)",
+              "- Suspicious: \(.suspicious // 0)",
+              "- Timed out: \(.timeout // 0)",
+              "- Interrupted: \(.check_was_interrupted_by_user // 0)",
+              "- Segfaults: \(.segfault // 0)"
+            ' "$stats"
+            echo
+            echo "Survivors are informational. This workflow has no mutation-score threshold."
+          } >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+
+      - name: Upload mutation reports
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mutmut-weekly-${{ github.run_id }}
+          path: |
+            mutmut-run.log
+            mutmut-results.txt
+            mutmut-export.log
+            mutants/mutmut-cicd-stats.json
+          if-no-files-found: ignore
+          retention-days: 14

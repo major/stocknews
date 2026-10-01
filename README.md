@@ -50,3 +50,17 @@ dependencies only, and runs as a non-root user.
 - `make coverage` requires at least 95% combined statement-and-branch coverage and 95% branch-only coverage.
 - `make test` runs the test suite.
 - `make audit` checks dependencies with `pip-audit`.
+
+## Mutation pilot
+
+The non-gating GitHub Actions mutation pilot runs on Sundays at 05:17 UTC on the
+default branch and can also be started manually. The schedule becomes active
+after this workflow is merged to the default branch. It uses the existing
+`mutmut` pilot scope for `src/stocknews/earnings.py` with
+`tests/test_earnings.py`, `tests/test_news.py`, and
+`tests/test_domain_properties.py`. It uses two workers and a 15-minute job
+limit. Result logs and statistics are available as a 14-day artifact.
+
+Surviving mutants are informational and have no score threshold. Setup,
+baseline, or mutation-command failures still fail the workflow. It does not run
+on pushes or pull requests and does not gate merges.
