@@ -52,11 +52,87 @@ pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 120
-src = ["src", "tests"]
+src = [
+    "src",
+    "tests",
+]
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+preview = false
+select = [
+    "A",
+    "ASYNC",
+    "B",
+    "BLE",
+    "C4",
+    "C90",
+    "COM",
+    "D",
+    "DTZ",
+    "E",
+    "F",
+    "FA",
+    "FLY",
+    "FURB",
+    "G",
+    "I",
+    "ICN",
+    "INP",
+    "INT",
+    "ISC",
+    "LOG",
+    "N",
+    "NPY",
+    "PERF",
+    "PGH",
+    "PIE",
+    "PL",
+    "PT",
+    "PTH",
+    "PYI",
+    "Q",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "SLF",
+    "SLOT",
+    "T10",
+    "T20",
+    "TC",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
+    "YTT",
+]
+# These rules conflict with Ruff's formatter.
+ignore = [
+    "COM812",
+    "COM819",
+    "D206",
+    "D300",
+    "E111",
+    "E114",
+    "E117",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "Q004",
+    "W191",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest tests use assertions to check behavior.
+"tests/**" = [
+    "S101",
+]
 
 [tool.ruff.format]
 quote-style = "double"
