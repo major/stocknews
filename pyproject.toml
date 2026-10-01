@@ -19,6 +19,8 @@ stocknews = "stocknews.__main__:main"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.168.3",
+    "mutmut>=3.8.0",
     "mypy>=1.15",
     "pip-audit>=2.9",
     "pyright>=1.1",
@@ -71,6 +73,15 @@ skip_covered = true
 
 [tool.coverage.html]
 show_contexts = true
+
+[tool.mutmut]
+source_paths = ["src/stocknews"]
+only_mutate = ["src/stocknews/earnings.py"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_earnings.py",
+    "tests/test_news.py",
+    "tests/test_domain_properties.py",
+]
 
 [tool.uv]
 default-groups = ["dev"]

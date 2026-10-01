@@ -7,6 +7,8 @@ __pycache__/
 .mypy_cache/
 .pyright/
 .ruff_cache/
+.mutmut-cache/
+mutants/
 .coverage
 coverage.xml
 htmlcov/
