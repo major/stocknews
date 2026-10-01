@@ -4,14 +4,20 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import signal
 import sys
+from io import StringIO
 from pathlib import Path
 
+import httpx2
 import pytest
+from httpx2.websockets import ASGIWebSocketTransport
 
-from stocknews.__main__ import main
+from stocknews.__main__ import main, run_application
+from stocknews.alpaca import StreamHandle
+from stocknews.models import Config, Trade
 
 
 def test_startup_reports_missing_credentials_as_json(
@@ -29,6 +35,226 @@ def test_startup_reports_missing_credentials_as_json(
     assert record["level"] == "ERROR"
     assert record["msg"] == "invalid configuration"
     assert record["error"] == "ALPACA_API_KEY is required"
+
+
+@pytest.mark.parametrize(
+    ("stock_completion", "expect_trade"),
+    [
+        ("completed-with-queued-trade", True),
+        ("pending-empty", False),
+        ("pending-with-queued-trade", True),
+    ],
+    ids=["precompleted-buffer", "normal-eof-while-reading", "queued-event-races-eof"],
+)
+def test_run_application_drains_queued_news_when_stock_stream_reaches_eof(
+    stock_completion: str,
+    expect_trade: bool,
+) -> None:
+    async def scenario() -> None:
+        delivery_started = asyncio.Event()
+        release_delivery = asyncio.Event()
+        news_disconnected = asyncio.Event()
+        finish_stock = asyncio.Event()
+        trade_logged = asyncio.Event()
+        delivered: list[dict[str, object]] = []
+        stock_queues: list[asyncio.Queue[Trade]] = []
+        stock_tasks: list[asyncio.Task[None]] = []
+
+        class ObservedTradeQueue(asyncio.Queue[Trade]):
+            def __init__(self) -> None:
+                super().__init__()
+                self.consumer_waiting = asyncio.Event()
+
+            async def get(self) -> Trade:
+                self.consumer_waiting.set()
+                return await super().get()
+
+        async def alpaca_app(scope, receive, send) -> None:
+            assert scope["path"] == "/v1beta1/news"
+            await receive()
+            await send({"type": "websocket.accept"})
+
+            async def send_json(payload: object) -> None:
+                await send({"type": "websocket.send", "text": json.dumps(payload)})
+
+            while True:
+                message = await receive()
+                if message["type"] == "websocket.disconnect":
+                    news_disconnected.set()
+                    return
+
+                request = json.loads(message["text"])
+                if request["action"] == "auth":
+                    await send_json({"T": "success", "msg": "authenticated"})
+                else:
+                    await send_json({"T": "subscription", "news": ["*"]})
+                    await send_json(
+                        {
+                            "T": "n",
+                            "symbols": ["AAPL"],
+                            "author": "Benzinga Newsdesk",
+                            "headline": "Apple launches a phone",
+                        }
+                    )
+
+        async def discord_handler(request: httpx2.Request) -> httpx2.Response:
+            delivery_started.set()
+            await release_delivery.wait()
+            delivered.append(json.loads(request.content))
+            return httpx2.Response(204)
+
+        async def stock_starter(
+            _client,
+            *,
+            base_url,
+            api_key,
+            api_secret,
+            stop_event,
+            on_terminated,
+        ) -> StreamHandle[Trade]:
+            events = ObservedTradeQueue()
+            stock_queues.append(events)
+
+            if stock_completion == "completed-with-queued-trade":
+                await delivery_started.wait()
+                events.put_nowait(Trade(symbol="SPY", price=500.25, size=100))
+
+                async def completed() -> None:
+                    return
+
+                task = asyncio.create_task(completed())
+                await task
+            else:
+
+                async def wait_for_eof() -> None:
+                    await finish_stock.wait()
+
+                task = asyncio.create_task(wait_for_eof())
+
+            stock_tasks.append(task)
+            return StreamHandle(events=events, task=task)
+
+        config = Config(
+            alpaca_api_key="startup-test-key",
+            alpaca_api_secret="startup-test-secret",
+            alpaca_news_stream_url="ws://news.test/v1beta1/news",
+            alpaca_stock_stream_url="wss://stocks.test/v2",
+            discord_analyst_webhooks=(),
+            discord_earnings_webhooks=(),
+            discord_news_webhooks=("https://discord.test/webhook/private-token",),
+            stock_logo="https://example.test/%s.webp",
+            transparent_png="https://example.test/transparent.png",
+            blocked_phrases=(),
+        )
+        output = StringIO()
+        logger = logging.Logger("startup-stream-test", level=logging.INFO)
+        logger.addHandler(logging.StreamHandler(output))
+
+        class TradeLogObserver(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if record.getMessage() == "stock trade":
+                    trade_logged.set()
+
+        logger.addHandler(TradeLogObserver())
+        stop_event = asyncio.Event()
+
+        async with ASGIWebSocketTransport(alpaca_app) as websocket_transport:
+            mounts = {
+                "ws://news.test": websocket_transport,
+                "https://discord.test": httpx2.MockTransport(discord_handler),
+            }
+            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
+                application = asyncio.create_task(
+                    run_application(config, client, logger, stop_event, stock_starter=stock_starter)
+                )
+                try:
+                    await asyncio.wait_for(delivery_started.wait(), timeout=2)
+                    if stock_completion != "completed-with-queued-trade":
+                        events = stock_queues[0]
+                        await asyncio.wait_for(events.consumer_waiting.wait(), timeout=2)
+                        if stock_completion == "pending-with-queued-trade":
+                            # Queue a final trade after the reader's completion callback is registered.
+                            stock_tasks[0].add_done_callback(
+                                lambda _task: events.put_nowait(Trade(symbol="SPY", price=500.25, size=100))
+                            )
+                        finish_stock.set()
+                        await asyncio.wait_for(stock_tasks[0], timeout=2)
+
+                    if expect_trade:
+                        await asyncio.wait_for(trade_logged.wait(), timeout=2)
+                    assert not application.done()
+                    release_delivery.set()
+                    await asyncio.wait_for(application, timeout=2)
+                    await asyncio.wait_for(news_disconnected.wait(), timeout=2)
+                finally:
+                    release_delivery.set()
+                    finish_stock.set()
+                    if not application.done():
+                        application.cancel()
+                    await asyncio.gather(application, return_exceptions=True)
+
+        assert stop_event.is_set()
+        assert len(delivered) == 1
+        assert delivered[0]["embeds"][0]["title"] == "AAPL: Apple launches a phone"
+        assert ("stock trade" in output.getvalue()) is expect_trade
+
+    asyncio.run(scenario())
+
+
+def test_run_application_shuts_down_on_termination_immediately_after_subscription() -> None:
+    async def scenario() -> None:
+        disconnected = asyncio.Event()
+
+        async def alpaca_app(scope, receive, send) -> None:
+            assert scope["path"] == "/v1beta1/news"
+            await receive()
+            await send({"type": "websocket.accept"})
+
+            async def send_json(payload: object) -> None:
+                await send({"type": "websocket.send", "text": json.dumps(payload)})
+
+            while True:
+                message = await receive()
+                if message["type"] == "websocket.disconnect":
+                    disconnected.set()
+                    return
+
+                request = json.loads(message["text"])
+                if request["action"] == "auth":
+                    await send_json({"T": "success", "msg": "authenticated"})
+                else:
+                    await send_json(
+                        [
+                            {"T": "subscription", "news": ["*"]},
+                            {"T": "error", "code": 403, "msg": "rejected startup-test-secret"},
+                        ]
+                    )
+
+        config = Config(
+            alpaca_api_key="startup-test-key",
+            alpaca_api_secret="startup-test-secret",
+            alpaca_news_stream_url="ws://news.test/v1beta1/news",
+            alpaca_stock_stream_url="wss://stocks.test/v2",
+            discord_analyst_webhooks=(),
+            discord_earnings_webhooks=(),
+            discord_news_webhooks=(),
+            stock_logo="https://example.test/%s.webp",
+            transparent_png="https://example.test/transparent.png",
+            blocked_phrases=(),
+        )
+        stop_event = asyncio.Event()
+        logger = logging.Logger("startup-terminal-test")
+
+        async with ASGIWebSocketTransport(alpaca_app) as websocket_transport:
+            async with httpx2.AsyncClient(mounts={"ws://news.test": websocket_transport}, timeout=10) as client:
+                with pytest.raises(RuntimeError, match="alpaca news stream terminated") as error:
+                    await run_application(config, client, logger, stop_event, stock_starter=None)
+
+        assert "startup-test-secret" not in str(error.value)
+        assert stop_event.is_set()
+        assert disconnected.is_set()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])

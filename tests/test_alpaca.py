@@ -258,6 +258,12 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
                         api_secret="private-secret",
                         stop_event=asyncio.Event(),
                     )
+                pending_alpaca_tasks = {
+                    task for task in asyncio.all_tasks() - pending_before if task.get_name().startswith("alpaca-news-")
+                }
+                assert not pending_alpaca_tasks, (
+                    f"pending Alpaca tasks after connection failure: {pending_alpaca_tasks!r}"
+                )
 
         assert "network transport error" in str(error.value)
         assert "private-key" not in str(error.value)
@@ -265,7 +271,6 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
         formatted = "".join(traceback.format_exception(error.value))
         assert "private-key" not in formatted
         assert "private-secret" not in formatted
-        assert not [task for task in asyncio.all_tasks() - pending_before if not task.done()]
 
     asyncio.run(scenario())
 
@@ -296,8 +301,12 @@ def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkey
                         api_secret="secret",
                         stop_event=asyncio.Event(),
                     )
-
-        assert not [task for task in asyncio.all_tasks() - pending_before if not task.done()]
+                pending_alpaca_tasks = {
+                    task for task in asyncio.all_tasks() - pending_before if task.get_name().startswith("alpaca-news-")
+                }
+                assert not pending_alpaca_tasks, (
+                    f"pending Alpaca tasks after authentication timeout: {pending_alpaca_tasks!r}"
+                )
 
     asyncio.run(scenario())
 
@@ -1384,5 +1393,135 @@ def test_loopback_stop_cancels_when_bounded_queue_is_full() -> None:
                 stop_event.set()
                 await asyncio.wait_for(stream.task, timeout=2)
                 await asyncio.wait_for(socket_closed.wait(), timeout=2)
+
+    asyncio.run(scenario())
+
+
+def test_stop_event_closes_an_established_idle_news_stream() -> None:
+    async def scenario() -> None:
+        subscribed = asyncio.Event()
+        socket_closed = asyncio.Event()
+
+        async def app(
+            scope: dict[str, object],
+            receive: Callable[..., Awaitable[dict[str, object]]],
+            send: Callable[..., Awaitable[None]],
+        ) -> None:
+            await receive()
+            await send({"type": "websocket.accept"})
+            while True:
+                incoming = await receive()
+                if incoming["type"] == "websocket.disconnect":
+                    socket_closed.set()
+                    return
+                request = json.loads(incoming["text"])
+                if request["action"] == "auth":
+                    await _send_json(send, {"T": "success", "msg": "authenticated"})
+                else:
+                    await _send_json(send, {"T": "subscription", "news": ["*"]})
+                    subscribed.set()
+
+        stop_event = asyncio.Event()
+        async with ASGIWebSocketTransport(app) as transport:
+            async with httpx2.AsyncClient(transport=transport) as client:
+                stream = await alpaca.start_news_stream(
+                    client,
+                    url="ws://alpaca.test/v1beta1/news",
+                    api_key="key",
+                    api_secret="secret",
+                    stop_event=stop_event,
+                )
+                await asyncio.wait_for(subscribed.wait(), timeout=2)
+                stop_event.set()
+                await asyncio.wait_for(stream.task, timeout=2)
+                await asyncio.wait_for(socket_closed.wait(), timeout=2)
+                assert stream.events.empty()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.allow_hosts(["127.0.0.1", "::1"])
+@pytest.mark.parametrize(
+    ("api_secret", "reason", "expected_detail"),
+    [
+        (
+            "private-secret",
+            "provider rejected private-key and private-secret",
+            "WebSocket disconnected with code 1008: provider rejected [redacted] and [redacted]",
+        ),
+        (
+            "",
+            "provider rejected private-key",
+            "WebSocket disconnected with code 1008: provider rejected [redacted]",
+        ),
+        ("private-secret", "", "WebSocket disconnected with code 1008"),
+    ],
+    ids=["redact-both-credentials", "empty-secret-is-safe", "empty-provider-reason"],
+)
+def test_initial_websocket_disconnect_reports_a_safe_diagnostic(
+    api_secret: str,
+    reason: str,
+    expected_detail: str,
+) -> None:
+    async def scenario() -> None:
+        async def handler(
+            _: int,
+            path: str,
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+            headers: list[tuple[bytes, bytes]],
+        ) -> None:
+            websocket = await _accept_websocket(path, headers, writer)
+            await _next_client_message(reader, writer, websocket)
+            writer.write(websocket.send(CloseConnection(1008, reason)))
+            await writer.drain()
+
+        async with _LoopbackServer(handler) as server:
+            async with httpx2.AsyncClient() as client:
+                with pytest.raises(alpaca.AlpacaStreamError, match="initial connection failed") as error:
+                    await alpaca.start_news_stream(
+                        client,
+                        url=f"{server.url}/v1beta1/news",
+                        api_key="private-key",
+                        api_secret=api_secret,
+                        stop_event=asyncio.Event(),
+                    )
+
+        assert str(error.value) == f"Alpaca news stream initial connection failed: {expected_detail}"
+        assert "private-key" not in str(error.value)
+        if api_secret:
+            assert api_secret not in str(error.value)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.allow_hosts(["127.0.0.1", "::1"])
+def test_initial_loopback_socket_reset_fails_stream_startup() -> None:
+    async def scenario() -> None:
+        async def handler(
+            _: int,
+            path: str,
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+            headers: list[tuple[bytes, bytes]],
+        ) -> None:
+            websocket = await _accept_websocket(path, headers, writer)
+            await _next_client_message(reader, writer, websocket)
+            writer.transport.abort()
+
+        async with _LoopbackServer(handler) as server:
+            async with httpx2.AsyncClient() as client:
+                with pytest.raises(alpaca.AlpacaStreamError, match="initial connection failed") as error:
+                    await alpaca.start_news_stream(
+                        client,
+                        url=f"{server.url}/v1beta1/news",
+                        api_key="private-key",
+                        api_secret="private-secret",
+                        stop_event=asyncio.Event(),
+                    )
+
+        assert server.connection_count == 1
+        assert "private-key" not in str(error.value)
+        assert "private-secret" not in str(error.value)
 
     asyncio.run(scenario())

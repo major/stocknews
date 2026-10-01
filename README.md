@@ -47,6 +47,6 @@ dependencies only, and runs as a non-root user.
 
 - `make check` and `make all` run formatting, lint, type checks, branch coverage,
   and the package build.
-- `make coverage` runs tests with branch coverage and requires at least 95%.
+- `make coverage` requires at least 95% combined statement-and-branch coverage and 95% branch-only coverage.
 - `make test` runs the test suite.
 - `make audit` checks dependencies with `pip-audit`.

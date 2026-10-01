@@ -6,7 +6,7 @@ Benzinga Newsdesk items, and sends Discord webhook embeds.
 ## Start here
 
 - Run local gates before committing: `make check`.
-- Use `make coverage` to require at least 95% branch coverage.
+- Use `make coverage` to require at least 95% combined coverage and 95% branch coverage.
 - Runtime: `uv sync --locked && uv run stocknews` or `podman compose up --build`.
 - Python 3.14 or newer and uv 0.12.18 are used for local development.
 
@@ -32,7 +32,7 @@ Read only what you need:
 - Pytest blocks sockets by default. Allow loopback access only for tests that need local servers.
 - Keep subprocess coverage enabled so CLI signal tests count toward coverage.
 - Keep Python dependencies and the lockfile managed by uv. Use `uv sync --locked`.
-- Keep the coverage gate at 95% or higher with branch coverage enabled.
+- Keep both combined statement-and-branch coverage and branch-only coverage at 95% or higher.
 - Preserve Benzinga Newsdesk filtering, earnings/analyst/general routing, IEX SPY/QQQ logs, and bounded worker behavior.
 - Container builds use the pinned UBI 9 Python 3.14 image and install locked runtime dependencies only. The runtime must remain non-root.
 - Keep action versions pinned to commit SHAs.
