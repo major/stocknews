@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         language:
-          - go
+          - python
     permissions:
       security-events: write
       contents: read
