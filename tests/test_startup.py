@@ -436,7 +436,8 @@ async def _run_terminated_stock_scenario() -> None:
             assert str(error.value) == f"alpaca stock stream terminated: {state.failure_message}"
             assert DUMMY_ALPACA_API_SECRET not in str(error.value)
             assert stop_event.is_set()
-            assert len(state.stock_tasks) == 1 and state.stock_tasks[0].done()
+            assert len(state.stock_tasks) == 1
+            assert state.stock_tasks[0].done()
             await asyncio.wait_for(state.news_disconnected.wait(), timeout=2)
             assert state.news_app_task is not None
             await asyncio.wait_for(state.news_app_task, timeout=2)

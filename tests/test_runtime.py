@@ -398,7 +398,8 @@ def _captured_app_logs(output: StringIO) -> Iterator[logging.Logger]:
 def _payload_title(payload: object) -> str:
     assert isinstance(payload, dict)
     embeds = payload["embeds"]
-    assert isinstance(embeds, list) and embeds
+    assert isinstance(embeds, list)
+    assert embeds
     embed = embeds[0]
     assert isinstance(embed, dict)
     title = embed["title"]
