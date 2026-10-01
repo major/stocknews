@@ -369,8 +369,8 @@ def test_send_payload_closes_unfinished_response_and_continues() -> None:
         try:
             async with httpx2.AsyncClient(timeout=0.5) as client:
                 await send_payload(client, [f"{base_url}/stalled", f"{base_url}/next"], {"embeds": []})
-            async with asyncio.timeout(1):
-                await first_response_closed.wait()
+                async with asyncio.timeout(1):
+                    await first_response_closed.wait()
         finally:
             server.close()
             await server.wait_closed()
@@ -417,8 +417,8 @@ def test_send_payload_deadline_is_sanitized_and_fanout_continues() -> None:
                         {"embeds": []},
                         deadline_seconds=0.25,
                     )
-            async with asyncio.timeout(1):
-                await first_request_closed.wait()
+                async with asyncio.timeout(1):
+                    await first_request_closed.wait()
         finally:
             server.close()
             await server.wait_closed()
