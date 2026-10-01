@@ -247,9 +247,11 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
             async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
                 raise failure
 
-        pending_before = asyncio.all_tasks()
         async with FailingTransport(unreachable_app) as transport:
             async with httpx2.AsyncClient(transport=transport) as client:
+                # Include tasks that belong to the already-open transport and client.
+                # Any pending task created by the Alpaca startup attempt is owned by it.
+                tasks_before_startup = asyncio.all_tasks()
                 with pytest.raises(alpaca.AlpacaStreamError, match="initial connection failed") as error:
                     await alpaca.start_news_stream(
                         client,
@@ -258,12 +260,11 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
                         api_secret="private-secret",
                         stop_event=asyncio.Event(),
                     )
-                pending_alpaca_tasks = {
-                    task for task in asyncio.all_tasks() - pending_before if task.get_name().startswith("alpaca-news-")
-                }
-                assert not pending_alpaca_tasks, (
-                    f"pending Alpaca tasks after connection failure: {pending_alpaca_tasks!r}"
-                )
+                new_pending_tasks = asyncio.all_tasks() - tasks_before_startup
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    new_pending_tasks.discard(current_task)
+                assert not new_pending_tasks, f"pending tasks after connection failure: {new_pending_tasks!r}"
 
         assert "network transport error" in str(error.value)
         assert "private-key" not in str(error.value)
@@ -290,9 +291,11 @@ def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkey
                 if (await receive())["type"] == "websocket.disconnect":
                     return
 
-        pending_before = asyncio.all_tasks()
         async with ASGIWebSocketTransport(app) as transport:
             async with httpx2.AsyncClient(transport=transport) as client:
+                # The open HTTPX2 and ASGI transport contexts are part of the baseline.
+                # Startup must leave no new task behind, including the unnamed stop watcher.
+                tasks_before_startup = asyncio.all_tasks()
                 with pytest.raises(alpaca.AlpacaStreamError, match="timed out waiting for authentication"):
                     await alpaca.start_news_stream(
                         client,
@@ -301,12 +304,11 @@ def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkey
                         api_secret="secret",
                         stop_event=asyncio.Event(),
                     )
-                pending_alpaca_tasks = {
-                    task for task in asyncio.all_tasks() - pending_before if task.get_name().startswith("alpaca-news-")
-                }
-                assert not pending_alpaca_tasks, (
-                    f"pending Alpaca tasks after authentication timeout: {pending_alpaca_tasks!r}"
-                )
+                new_pending_tasks = asyncio.all_tasks() - tasks_before_startup
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    new_pending_tasks.discard(current_task)
+                assert not new_pending_tasks, f"pending tasks after authentication timeout: {new_pending_tasks!r}"
 
     asyncio.run(scenario())
 
@@ -1259,6 +1261,7 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
     async def scenario() -> None:
         auth_received = asyncio.Event()
         socket_closed = asyncio.Event()
+        handler_task = None
 
         async def handler(
             _: int,
@@ -1267,6 +1270,8 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
             writer: asyncio.StreamWriter,
             headers: list[tuple[bytes, bytes]],
         ) -> None:
+            nonlocal handler_task
+            handler_task = asyncio.current_task()
             websocket = await _accept_websocket(path, headers, writer)
             while events := await _next_ws_events(reader, websocket):
                 for event in events:
@@ -1281,6 +1286,7 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
         async with _LoopbackServer(handler) as server:
             stop_event = asyncio.Event()
             async with httpx2.AsyncClient() as client:
+                tasks_before_startup = asyncio.all_tasks()
                 startup = asyncio.create_task(
                     alpaca.start_news_stream(
                         client,
@@ -1295,6 +1301,15 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
                 with pytest.raises(alpaca.AlpacaStreamError, match="stopped before subscription"):
                     await asyncio.wait_for(startup, timeout=2)
                 await asyncio.wait_for(socket_closed.wait(), timeout=2)
+                # The loopback handler is a separate test-server task. Let it finish
+                # before checking for tasks left by the adapter startup cancellation.
+                assert handler_task is not None
+                await asyncio.wait_for(handler_task, timeout=2)
+                new_pending_tasks = asyncio.all_tasks() - tasks_before_startup
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    new_pending_tasks.discard(current_task)
+                assert not new_pending_tasks, f"pending tasks after startup cancellation: {new_pending_tasks!r}"
 
     asyncio.run(scenario())
 

@@ -16,7 +16,7 @@ import pytest
 from httpx2.websockets import ASGIWebSocketTransport
 
 from stocknews.__main__ import main, run_application
-from stocknews.alpaca import StreamHandle
+from stocknews.alpaca import AlpacaStreamError, StreamHandle
 from stocknews.models import Config, Trade
 
 
@@ -253,6 +253,112 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
         assert "startup-test-secret" not in str(error.value)
         assert stop_event.is_set()
         assert disconnected.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_run_application_fails_on_terminated_stock_handle_while_news_is_open() -> None:
+    async def scenario() -> None:
+        news_subscribed = asyncio.Event()
+        news_disconnected = asyncio.Event()
+        news_app_task = None
+        stock_tasks: list[asyncio.Task[None]] = []
+        webhook_requests: list[httpx2.Request] = []
+        failure_message = "Alpaca trades stream connection failed: WebSocketNetworkError"
+        stock_failure = AlpacaStreamError(failure_message)
+
+        async def alpaca_app(scope, receive, send) -> None:
+            nonlocal news_app_task
+            news_app_task = asyncio.current_task()
+            assert scope["path"] == "/v1beta1/news"
+            await receive()
+            await send({"type": "websocket.accept"})
+
+            async def send_json(payload: object) -> None:
+                await send({"type": "websocket.send", "text": json.dumps(payload)})
+
+            while True:
+                message = await receive()
+                if message["type"] == "websocket.disconnect":
+                    news_disconnected.set()
+                    return
+
+                request = json.loads(message["text"])
+                if request["action"] == "auth":
+                    await send_json({"T": "success", "msg": "authenticated"})
+                else:
+                    await send_json({"T": "subscription", "news": ["*"]})
+                    news_subscribed.set()
+
+        async def discord_handler(request: httpx2.Request) -> httpx2.Response:
+            webhook_requests.append(request)
+            return httpx2.Response(204)
+
+        async def stock_starter(
+            _client,
+            *,
+            base_url,
+            api_key,
+            api_secret,
+            stop_event,
+            on_terminated,
+        ) -> StreamHandle[Trade]:
+            await news_subscribed.wait()
+
+            async def completed() -> None:
+                return
+
+            task = asyncio.create_task(completed())
+            await task
+            assert not news_disconnected.is_set()
+            on_terminated(stock_failure)
+            stock_tasks.append(task)
+            return StreamHandle(events=asyncio.Queue(), task=task)
+
+        config = Config(
+            alpaca_api_key="startup-test-key",
+            alpaca_api_secret="startup-test-secret",
+            alpaca_news_stream_url="ws://news.test/v1beta1/news",
+            alpaca_stock_stream_url="wss://stocks.test/v2",
+            discord_analyst_webhooks=(),
+            discord_earnings_webhooks=(),
+            discord_news_webhooks=("https://discord.test/webhook/startup-test-token",),
+            stock_logo="https://example.test/%s.webp",
+            transparent_png="https://example.test/transparent.png",
+            blocked_phrases=(),
+        )
+        stop_event = asyncio.Event()
+        logger = logging.Logger("startup-stock-termination-test")
+
+        async with ASGIWebSocketTransport(alpaca_app) as websocket_transport:
+            mounts = {
+                "ws://news.test": websocket_transport,
+                "https://discord.test": httpx2.MockTransport(discord_handler),
+            }
+            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
+                # Context-owned tasks belong to the baseline. The ASGI server task
+                # created for this request is awaited before checking for new leaks.
+                tasks_before_application = asyncio.all_tasks()
+                with pytest.raises(RuntimeError, match="alpaca stock stream terminated") as error:
+                    await asyncio.wait_for(
+                        run_application(config, client, logger, stop_event, stock_starter=stock_starter),
+                        timeout=2,
+                    )
+
+                assert str(error.value) == f"alpaca stock stream terminated: {failure_message}"
+                assert "startup-test-secret" not in str(error.value)
+                assert stop_event.is_set()
+                assert len(stock_tasks) == 1 and stock_tasks[0].done()
+                await asyncio.wait_for(news_disconnected.wait(), timeout=2)
+                assert news_app_task is not None
+                await asyncio.wait_for(news_app_task, timeout=2)
+
+                new_pending_tasks = asyncio.all_tasks() - tasks_before_application
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    new_pending_tasks.discard(current_task)
+                assert not new_pending_tasks, f"pending tasks after stock termination: {new_pending_tasks!r}"
+                assert webhook_requests == []
 
     asyncio.run(scenario())
 
