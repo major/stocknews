@@ -133,13 +133,16 @@ async def run_application(
 
 async def _run() -> None:
     logger = configure_logging()
+    logger.info(
+        "starting stocknews",
+        extra={"version": "dev", "commit": os.environ.get("GIT_SHA") or "unknown", "build_date": "unknown"},
+    )
     try:
         config = load_config(os.environ)
     except ValueError as error:
         logger.error("invalid configuration", extra={"error": str(error)})
         raise SystemExit(2) from error
 
-    logger.info("starting stocknews", extra={"version": "dev", "commit": "unknown", "build_date": "unknown"})
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     task = asyncio.current_task()
