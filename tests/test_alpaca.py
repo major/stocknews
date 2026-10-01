@@ -6,7 +6,7 @@ import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from http import HTTPStatus
-from typing import cast
+from typing import Self, cast
 
 import httpcore2
 import httpx2
@@ -793,7 +793,7 @@ class _LoopbackServer:
         self.paths: list[str] = []
         self.url = ""
 
-    async def __aenter__(self) -> _LoopbackServer:
+    async def __aenter__(self) -> Self:
         self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
         address = self._server.sockets[0].getsockname()
         self.url = f"ws://127.0.0.1:{address[1]}"
