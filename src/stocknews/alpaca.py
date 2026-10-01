@@ -1,26 +1,29 @@
 """Async WebSocket adapters for Alpaca news and stock trades."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import math
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 import anyio
 import httpcore2
 import httpx2
 from httpx2.websockets import (
-    AsyncWebSocketSession,
     HTTPXWSException,
     WebSocketDisconnect,
     WebSocketNetworkError,
     WebSocketUpgradeError,
 )
 
-from .models import AlpacaSettings, NewsItem, Trade
+from .models import NewsItem, Trade
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from httpx2.websockets import AsyncWebSocketSession
+
+    from .models import AlpacaSettings
 
 __all__ = [
     "AlpacaStreamError",

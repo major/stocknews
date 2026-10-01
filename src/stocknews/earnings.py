@@ -1,8 +1,11 @@
 """Recognize and format earnings headlines."""
 
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _EARNINGS_NEWS_RE = re.compile(
     r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[KMB]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[KMB]*)",

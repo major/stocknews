@@ -1,8 +1,11 @@
 """Load application settings from an explicit environment mapping."""
 
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from stocknews.models import Config
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _DEFAULT_NEWS_STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
 _DEFAULT_STOCK_STREAM_URL = "wss://stream.data.alpaca.markets/v2"

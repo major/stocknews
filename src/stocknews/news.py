@@ -1,12 +1,15 @@
 """Filter and classify incoming news messages."""
 
-from collections.abc import Sequence
 from html import unescape
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from stocknews.analyst import parse_analyst
 from stocknews.earnings import has_blocked_phrases, is_earnings_news
-from stocknews.models import NewsItem
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from stocknews.models import NewsItem
 
 NewsClassification = Literal[
     "earnings",

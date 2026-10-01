@@ -4,9 +4,8 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterable, Awaitable, Callable
 from contextlib import suppress
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import httpx2
 
@@ -20,6 +19,9 @@ from stocknews.config import load_config
 from stocknews.logging import configure_logging
 from stocknews.models import AlpacaSettings, Config, NewsItem, Trade
 from stocknews.runtime import run
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterable, Awaitable, Callable
 
 
 class TradeStreamStarter(Protocol):

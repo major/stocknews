@@ -2,14 +2,17 @@
 
 import asyncio
 import json
-from collections.abc import Sequence
-from typing import NotRequired, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 import httpx2
 
 from stocknews.analyst import parse_analyst
 from stocknews.earnings import company_name, describe_earnings
-from stocknews.models import NewsItem
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from stocknews.models import NewsItem
 
 _RAISES_COLOR = 0x4CAF50
 _LOWERS_COLOR = 0xD42020

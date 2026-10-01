@@ -1,13 +1,10 @@
 """Coordinate Alpaca stream events and sequential Discord delivery."""
 
 import asyncio
-import logging
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, replace
 from html import unescape
-from typing import cast
-
-import httpx2
+from typing import TYPE_CHECKING, cast
 
 from stocknews.discord import (
     WebhookPayload,
@@ -16,8 +13,14 @@ from stocknews.discord import (
     news_payload,
     send_payload,
 )
-from stocknews.models import Config, NewsItem, Trade
 from stocknews.news import classify_news
+
+if TYPE_CHECKING:
+    import logging
+
+    import httpx2
+
+    from stocknews.models import Config, NewsItem, Trade
 
 DELIVERY_QUEUE_CAPACITY = 16
 

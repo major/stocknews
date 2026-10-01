@@ -8,11 +8,11 @@ import logging
 import os
 import signal
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 from io import StringIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx2
 import pytest
@@ -21,6 +21,9 @@ from httpx2.websockets import ASGIWebSocketTransport
 from stocknews.__main__ import main, run_application
 from stocknews.alpaca import AlpacaStreamError, StreamHandle
 from stocknews.models import AlpacaSettings, Config, Trade
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 EXPECTED_CONFIGURATION_ERROR_EXIT_CODE = 2
 EXPECTED_STARTUP_LOG_RECORD_COUNT = 2
