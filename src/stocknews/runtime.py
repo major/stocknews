@@ -75,6 +75,16 @@ def _make_delivery(item: NewsItem, config: Config, logger: logging.Logger) -> _D
         webhooks = config.discord_news_webhooks
 
     if payload is None:
+        logger.info(
+            "skipping news item",
+            extra={
+                "reason": "no_payload",
+                "kind": classification,
+                "headline": headline,
+                "author": item.author,
+                "symbols": item.symbols,
+            },
+        )
         return None
     return _Delivery(webhooks, payload, classification, symbol)
 
@@ -254,14 +264,23 @@ async def run(
             interrupted_during_cleanup |= interrupted
 
         pending_tasks = [
-            cast(asyncio.Task[object], task) for task in (news_read, stock_read, stock_connection) if task is not None
+            (stream_name, cast(asyncio.Task[object], task))
+            for stream_name, task in (("news", news_read), ("stock", stock_read), ("stock", stock_connection))
+            if task is not None
         ]
-        for task in pending_tasks:
-            if not task.done():
-                task.cancel()
-        for task in pending_tasks:
-            interrupted, _ = await _settle_task(task, on_interruption=cancel_worker)
+        cancelled_tasks: set[asyncio.Task[object]] = set()
+        for _, task in pending_tasks:
+            if not task.done() and task.cancel():
+                cancelled_tasks.add(task)
+        for stream_name, task in pending_tasks:
+            interrupted, cleanup_error = await _settle_task(task, on_interruption=cancel_worker)
             interrupted_during_cleanup |= interrupted
+            if cleanup_error is not None and task in cancelled_tasks:
+                logger.warning(
+                    "failed to close Alpaca %s stream",
+                    stream_name,
+                    extra={"error": type(cleanup_error).__name__, "stream": stream_name},
+                )
 
         iterator_close_tasks = [
             (stream_name, asyncio.create_task(_close_iterator(iterator)))

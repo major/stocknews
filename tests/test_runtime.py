@@ -1173,7 +1173,7 @@ def test_cancellation_during_normal_delivery_drain_cancels_http_request() -> Non
     asyncio.run(scenario())
 
 
-def test_stream_cleanup_error_does_not_hide_established_stream_failure() -> None:
+def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: pytest.LogCaptureFixture) -> None:
     async def scenario() -> None:
         news_iterator_closed = asyncio.Event()
         never = asyncio.Event()
@@ -1189,7 +1189,7 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure() -> None
                     )
                 finally:
                     news_iterator_closed.set()
-                    raise OSError("news stream close failed")
+                    raise OSError("private stream credential")
 
             return events()
 
@@ -1200,11 +1200,66 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure() -> None
 
             return events()
 
+        logger = _logger(StringIO())
+        logger.addHandler(caplog.handler)
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _request: httpx2.Response(204))) as client:
             with pytest.raises(RuntimeError, match="alpaca stock stream terminated: stock stream stopped"):
-                await run(_config(), client, _logger(StringIO()), connect_news, connect_stock)
+                await run(_config(), client, logger, connect_news, connect_stock)
 
         assert news_iterator_closed.is_set()
+        cleanup_logs = [
+            record for record in caplog.records if record.getMessage() == "failed to close Alpaca news stream"
+        ]
+        assert len(cleanup_logs) == 1
+        assert cleanup_logs[0].error == "OSError"
+        assert cleanup_logs[0].stream == "news"
+        assert "private stream credential" not in caplog.text
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("headline", "kind"),
+    [
+        ("Apple Q1 EPS ~$(0.10) miss $0.20 Estimate", "earnings"),
+        ("Apple Q1 EPS $-0.10 miss $0.20 Estimate", "earnings"),
+        (
+            "Piper Sandler Initiates Coverage on Nvidia to Overweight, Announces Price Target to $850",
+            "analyst",
+        ),
+        ("Goldman Sachs Maintains Buy on Apple, Maintains Price Target at $223", "analyst"),
+    ],
+    ids=[
+        "unparseable-approximate-earnings",
+        "negative-earnings",
+        "announced-analyst-target",
+        "maintained-analyst-target",
+    ],
+)
+def test_classified_news_without_payload_is_logged_and_not_delivered(headline: str, kind: str) -> None:
+    async def scenario() -> None:
+        posts: list[str] = []
+        output = StringIO()
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            posts.append(str(request.url))
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            async def events() -> AsyncIterable[NewsItem]:
+                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline=headline)
+
+            return events()
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(output), connect_news)
+
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        skipped = [record for record in records if record["msg"] == "skipping news item"]
+        assert posts == []
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "no_payload"
+        assert skipped[0]["kind"] == kind
 
     asyncio.run(scenario())
 
