@@ -121,6 +121,13 @@ def test_analyst_payload_suppresses_announced_or_maintained_targets(headline: st
     assert analyst_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG) is None
 
 
+def test_analyst_payload_omits_empty_headline_description() -> None:
+    payload = analyst_payload("AAPL", "", STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert "description" not in payload["embeds"][0]
+
+
 def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> None:
     item = NewsItem(
         symbols=("AAPL", "MSFT"),
@@ -310,5 +317,167 @@ def test_send_payload_does_not_hide_programming_errors() -> None:
                     ["https://discord.test/webhook"],
                     {"embeds": []},
                 )
+
+    asyncio.run(run())
+
+
+async def _read_request_path(reader: asyncio.StreamReader) -> str | None:
+    request_line = await reader.readline()
+    if not request_line:
+        return None
+
+    headers: dict[str, str] = {}
+    while line := await reader.readline():
+        if line == b"\r\n":
+            break
+        name, value = line.decode().split(":", maxsplit=1)
+        headers[name.lower()] = value.strip()
+
+    await reader.readexactly(int(headers.get("content-length", "0")))
+    return request_line.split()[1].decode()
+
+
+@pytest.mark.allow_hosts(["127.0.0.1"])
+def test_send_payload_closes_unfinished_response_and_continues() -> None:
+    async def run() -> None:
+        requested: list[str] = []
+        first_response_closed = asyncio.Event()
+        first_connection_end: list[bytes] = []
+
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                path = await _read_request_path(reader)
+                if path is None:
+                    return
+                requested.append(path)
+
+                if path == "/stalled":
+                    writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n")
+                    await writer.drain()
+                    first_connection_end.append(await reader.read())
+                    first_response_closed.set()
+                else:
+                    writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        address = server.sockets[0].getsockname()
+        base_url = f"http://127.0.0.1:{address[1]}"
+        try:
+            async with httpx2.AsyncClient(timeout=0.5) as client:
+                await send_payload(client, [f"{base_url}/stalled", f"{base_url}/next"], {"embeds": []})
+            async with asyncio.timeout(1):
+                await first_response_closed.wait()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert requested == ["/stalled", "/next"]
+        assert first_connection_end == [b""]
+
+    asyncio.run(run())
+
+
+@pytest.mark.allow_hosts(["127.0.0.1"])
+def test_send_payload_deadline_is_sanitized_and_fanout_continues() -> None:
+    async def run() -> None:
+        requested: list[str] = []
+        first_request_closed = asyncio.Event()
+        first_connection_end: list[bytes] = []
+
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                path = await _read_request_path(reader)
+                if path is None:
+                    return
+                requested.append(path)
+
+                if path == "/private-token":
+                    first_connection_end.append(await reader.read())
+                    first_request_closed.set()
+                else:
+                    writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        address = server.sockets[0].getsockname()
+        base_url = f"http://127.0.0.1:{address[1]}"
+        try:
+            async with httpx2.AsyncClient(timeout=None) as client:
+                with pytest.raises(RuntimeError) as error:
+                    await send_payload(
+                        client,
+                        [f"{base_url}/private-token", f"{base_url}/next"],
+                        {"embeds": []},
+                        deadline_seconds=0.25,
+                    )
+            async with asyncio.timeout(1):
+                await first_request_closed.wait()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert requested == ["/private-token", "/next"]
+        assert first_connection_end == [b""]
+        assert str(error.value) == "post webhook: deadline exceeded"
+        assert "private-token" not in str(error.value)
+
+    asyncio.run(run())
+
+
+@pytest.mark.allow_hosts(["127.0.0.1"])
+def test_send_payload_propagates_external_cancellation() -> None:
+    async def run() -> None:
+        requested: list[str] = []
+        first_request_received = asyncio.Event()
+        release_request = asyncio.Event()
+
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                path = await _read_request_path(reader)
+                if path is None:
+                    return
+                requested.append(path)
+
+                if path == "/slow":
+                    first_request_received.set()
+                    await release_request.wait()
+                else:
+                    writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        address = server.sockets[0].getsockname()
+        base_url = f"http://127.0.0.1:{address[1]}"
+        try:
+            async with httpx2.AsyncClient(timeout=None) as client:
+                task = asyncio.create_task(
+                    send_payload(
+                        client,
+                        [f"{base_url}/slow", f"{base_url}/next"],
+                        {"embeds": []},
+                        deadline_seconds=10,
+                    )
+                )
+                async with asyncio.timeout(1):
+                    await first_request_received.wait()
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        finally:
+            release_request.set()
+            server.close()
+            await server.wait_closed()
+
+        assert requested == ["/slow"]
 
     asyncio.run(run())

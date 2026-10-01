@@ -1,5 +1,6 @@
 """Build Discord embeds and deliver them to configured webhooks."""
 
+import asyncio
 import json
 from collections.abc import Sequence
 from typing import NotRequired, TypedDict
@@ -12,6 +13,7 @@ from stocknews.models import NewsItem
 
 _RAISES_COLOR = 0x4CAF50
 _LOWERS_COLOR = 0xD42020
+_WEBHOOK_DEADLINE_SECONDS = 10.0
 
 
 class EmbedImage(TypedDict):
@@ -110,30 +112,36 @@ async def send_payload(
     client: httpx2.AsyncClient,
     webhooks: Sequence[str],
     payload: WebhookPayload,
+    *,
+    deadline_seconds: float = _WEBHOOK_DEADLINE_SECONDS,
 ) -> None:
-    """Post one JSON payload to each webhook in order, raising sanitized failures."""
+    """Post to each webhook in order with a per-webhook deadline and sanitized failures."""
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     headers = {"Content-Type": "application/json"}
     errors: list[str] = []
 
     for webhook in webhooks:
         try:
-            request = client.build_request("POST", webhook, content=body, headers=headers)
-        except httpx2.InvalidURL:
-            errors.append("build webhook request: invalid webhook URL")
-            continue
-        if not request.url.is_absolute_url or not request.url.host:
-            errors.append("build webhook request: invalid webhook URL")
-            continue
+            async with asyncio.timeout(deadline_seconds):
+                try:
+                    request = client.build_request("POST", webhook, content=body, headers=headers)
+                except httpx2.InvalidURL:
+                    errors.append("build webhook request: invalid webhook URL")
+                    continue
+                if not request.url.is_absolute_url or not request.url.host:
+                    errors.append("build webhook request: invalid webhook URL")
+                    continue
 
-        try:
-            response = await client.send(request)
+                response = await client.send(request, stream=True)
+                try:
+                    if not 200 <= response.status_code < 300:
+                        errors.append(f"post webhook: unexpected status {response.status_code}")
+                finally:
+                    await response.aclose()
+        except TimeoutError:
+            errors.append("post webhook: deadline exceeded")
         except httpx2.RequestError, httpx2.InvalidURL:
             errors.append("post webhook: request failed")
-            continue
-
-        if not 200 <= response.status_code < 300:
-            errors.append(f"post webhook: unexpected status {response.status_code}")
 
     if errors:
         raise RuntimeError("; ".join(errors))
