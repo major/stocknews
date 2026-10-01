@@ -406,6 +406,141 @@ def _payload_title(payload: object) -> str:
     return title
 
 
+class _StockEofScenario:
+    """Coordinate a queued news delivery and the final stock trade."""
+
+    def __init__(self) -> None:
+        """Initialize synchronization events and captured webhook output."""
+        self.request_started = asyncio.Event()
+        self.release_request = asyncio.Event()
+        self.news_iterator_closed = asyncio.Event()
+        self.delivered: list[dict[str, object]] = []
+        self.expected_spy_trade_price = 500.25
+
+    async def handle_webhook(self, request: httpx2.Request) -> httpx2.Response:
+        """Hold Discord delivery until the stock EOF assertion is ready.
+
+        Args:
+            request: The webhook request made by the runtime.
+
+        Returns:
+            A successful response after the request is released.
+        """
+        self.request_started.set()
+        await self.release_request.wait()
+        self.delivered.append(json.loads(request.content))
+        return httpx2.Response(204)
+
+    async def connect_news(self) -> AsyncIterable[NewsItem]:
+        """Return news that stays open until runtime cleanup.
+
+        Returns:
+            A news stream with one item and observable cleanup.
+        """
+
+        async def events() -> AsyncGenerator[NewsItem]:
+            try:
+                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
+                await asyncio.Event().wait()
+            finally:
+                self.news_iterator_closed.set()
+
+        return events()
+
+    async def connect_stock(self) -> AsyncIterable[Trade]:
+        """Return one trade after the news webhook starts.
+
+        Returns:
+            A stock stream that reaches EOF after its final trade.
+        """
+        scenario = self
+
+        class StockStream:
+            def __init__(self) -> None:
+                self._yielded = False
+
+            def __aiter__(self) -> AsyncIterator[Trade]:
+                return self
+
+            async def __anext__(self) -> Trade:
+                if self._yielded:
+                    raise StopAsyncIteration
+                await scenario.request_started.wait()
+                self._yielded = True
+                return Trade(symbol="SPY", price=scenario.expected_spy_trade_price, size=100)
+
+        return StockStream()
+
+
+class _IteratorCloseCancellationScenario:
+    """Coordinate stream cleanup with cancellation of a pending webhook."""
+
+    def __init__(self) -> None:
+        """Initialize synchronization events and observed webhook titles."""
+        self.request_started = asyncio.Event()
+        self.iterator_close_started = asyncio.Event()
+        self.release_iterator_close = asyncio.Event()
+        self.sender_cancelled = asyncio.Event()
+        self.second_request_started = asyncio.Event()
+        self.requested_titles: list[str] = []
+
+    async def handle_webhook(self, request: httpx2.Request) -> httpx2.Response:
+        """Hold the first delivery and record whether it is cancelled.
+
+        Args:
+            request: The webhook request made by the runtime.
+
+        Returns:
+            A successful response for the second news item.
+        """
+        title = _payload_title(json.loads(request.content))
+        self.requested_titles.append(title)
+        if title == "MSFT: Microsoft launches a tablet":
+            self.second_request_started.set()
+            return httpx2.Response(204)
+        self.request_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.sender_cancelled.set()
+            raise
+
+    async def connect_news(self) -> AsyncIterable[NewsItem]:
+        """Return two news items with a held-open iterator close.
+
+        Returns:
+            A stream that exposes iterator cleanup timing.
+        """
+        scenario = self
+
+        class NewsStream:
+            def __init__(self) -> None:
+                self._yielded = False
+                self._second_yielded = False
+
+            def __aiter__(self) -> AsyncIterator[NewsItem]:
+                return self
+
+            async def __anext__(self) -> NewsItem:
+                if self._yielded and self._second_yielded:
+                    raise StopAsyncIteration
+                if self._yielded:
+                    self._second_yielded = True
+                    return NewsItem(
+                        symbols=("MSFT",),
+                        author="Benzinga Newsdesk",
+                        headline="Microsoft launches a tablet",
+                    )
+                self._yielded = True
+                return NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
+
+            async def aclose(self) -> None:
+                scenario.iterator_close_started.set()
+                await scenario.release_iterator_close.wait()
+
+        return NewsStream()
+
+
 def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
     """Verify news classification produces the expected Discord payloads."""
 
@@ -1133,68 +1268,28 @@ def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
     """Verify stock EOF logs its trade and drains queued news delivery."""
 
     async def scenario() -> None:
-        expected_spy_trade_price = 500.25
-        request_started = asyncio.Event()
-        release_request = asyncio.Event()
-        news_iterator_closed = asyncio.Event()
-        delivered: list[dict[str, object]] = []
         output = StringIO()
-
-        async def handler(request: httpx2.Request) -> httpx2.Response:
-            request_started.set()
-            await release_request.wait()
-            delivered.append(json.loads(request.content))
-            return httpx2.Response(204)
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncIterable[NewsItem]:
-                try:
-                    yield NewsItem(
-                        symbols=("AAPL",),
-                        author="Benzinga Newsdesk",
-                        headline="Apple launches a phone",
-                    )
-                    await asyncio.Event().wait()
-                finally:
-                    news_iterator_closed.set()
-
-            return events()
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            class StockStream:
-                def __init__(self) -> None:
-                    self._yielded = False
-
-                def __aiter__(self) -> AsyncIterator[Trade]:
-                    return self
-
-                async def __anext__(self) -> Trade:
-                    if self._yielded:
-                        raise StopAsyncIteration
-                    await request_started.wait()
-                    self._yielded = True
-                    return Trade(symbol="SPY", price=expected_spy_trade_price, size=100)
-
-            return StockStream()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            runtime = asyncio.create_task(run(_config(), client, _logger(output), connect_news, connect_stock))
+        streams = _StockEofScenario()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(streams.handle_webhook), timeout=10) as client:
+            runtime = asyncio.create_task(
+                run(_config(), client, _logger(output), streams.connect_news, streams.connect_stock)
+            )
             try:
-                await asyncio.wait_for(request_started.wait(), timeout=1)
-                await asyncio.wait_for(news_iterator_closed.wait(), timeout=1)
+                await asyncio.wait_for(streams.request_started.wait(), timeout=1)
+                await asyncio.wait_for(streams.news_iterator_closed.wait(), timeout=1)
                 assert not runtime.done()
-                release_request.set()
+                streams.release_request.set()
                 await asyncio.wait_for(runtime, timeout=1)
             finally:
-                release_request.set()
+                streams.release_request.set()
                 if not runtime.done():
                     runtime.cancel()
                 await asyncio.gather(runtime, return_exceptions=True)
 
         trade_log = next(json.loads(line) for line in output.getvalue().splitlines() if '"msg":"stock trade"' in line)
         assert trade_log["symbol"] == "SPY"
-        assert trade_log["price"] == expected_spy_trade_price
-        assert _payload_title(delivered[0]) == "AAPL: Apple launches a phone"
+        assert trade_log["price"] == streams.expected_spy_trade_price
+        assert _payload_title(streams.delivered[0]) == "AAPL: Apple launches a phone"
 
     asyncio.run(scenario())
 
@@ -1203,70 +1298,23 @@ def test_cancellation_during_iterator_close_cancels_delivery_before_close_finish
     """Verify cancellation stops delivery before iterator cleanup finishes."""
 
     async def scenario() -> None:
-        request_started = asyncio.Event()
-        iterator_close_started = asyncio.Event()
-        release_iterator_close = asyncio.Event()
-        sender_cancelled = asyncio.Event()
-        second_request_started = asyncio.Event()
-        requested_titles: list[str] = []
-
-        class NewsStream:
-            def __init__(self) -> None:
-                self._yielded = False
-                self._second_yielded = False
-
-            def __aiter__(self) -> AsyncIterator[NewsItem]:
-                return self
-
-            async def __anext__(self) -> NewsItem:
-                if self._yielded:
-                    if self._second_yielded:
-                        raise StopAsyncIteration
-                    self._second_yielded = True
-                    return NewsItem(
-                        symbols=("MSFT",),
-                        author="Benzinga Newsdesk",
-                        headline="Microsoft launches a tablet",
-                    )
-                self._yielded = True
-                return NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
-
-            async def aclose(self) -> None:
-                iterator_close_started.set()
-                await release_iterator_close.wait()
-
-        async def handler(request: httpx2.Request) -> httpx2.Response:
-            title = _payload_title(json.loads(request.content))
-            requested_titles.append(title)
-            if title == "MSFT: Microsoft launches a tablet":
-                second_request_started.set()
-                return httpx2.Response(204)
-            request_started.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                sender_cancelled.set()
-                raise
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            return NewsStream()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        streams = _IteratorCloseCancellationScenario()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(streams.handle_webhook), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
-            runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
+            runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), streams.connect_news))
             try:
-                await asyncio.wait_for(request_started.wait(), timeout=1)
-                await asyncio.wait_for(iterator_close_started.wait(), timeout=1)
+                await asyncio.wait_for(streams.request_started.wait(), timeout=1)
+                await asyncio.wait_for(streams.iterator_close_started.wait(), timeout=1)
                 runtime.cancel()
-                await asyncio.wait_for(sender_cancelled.wait(), timeout=1)
+                await asyncio.wait_for(streams.sender_cancelled.wait(), timeout=1)
                 assert not runtime.done()
-                assert requested_titles == ["AAPL: Apple launches a phone"]
-                assert not second_request_started.is_set()
-                release_iterator_close.set()
+                assert streams.requested_titles == ["AAPL: Apple launches a phone"]
+                assert not streams.second_request_started.is_set()
+                streams.release_iterator_close.set()
                 with pytest.raises(asyncio.CancelledError):
                     await asyncio.wait_for(runtime, timeout=1)
-                assert requested_titles == ["AAPL: Apple launches a phone"]
-                assert not second_request_started.is_set()
+                assert streams.requested_titles == ["AAPL: Apple launches a phone"]
+                assert not streams.second_request_started.is_set()
                 leaked_tasks = {
                     task
                     for task in asyncio.all_tasks()
@@ -1274,7 +1322,7 @@ def test_cancellation_during_iterator_close_cancels_delivery_before_close_finish
                 }
                 assert not leaked_tasks, f"unexpected tasks before client cleanup: {leaked_tasks!r}"
             finally:
-                release_iterator_close.set()
+                streams.release_iterator_close.set()
                 if not runtime.done():
                     runtime.cancel()
                 await asyncio.gather(runtime, return_exceptions=True)

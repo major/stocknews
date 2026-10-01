@@ -236,12 +236,7 @@ async def _run_stream[EventT](
                     return
                 continue
             if isinstance(outcome, _TerminalFailure):
-                if not started.done():
-                    started.set_exception(outcome.error)
-                    return
-                if on_terminated is None:
-                    raise outcome.error
-                on_terminated(outcome.error)
+                _report_terminal_failure(outcome.error, started, on_terminated)
                 return
     except asyncio.CancelledError:
         if not started.done():
@@ -250,6 +245,19 @@ async def _run_stream[EventT](
 
     if not started.done():
         started.set_exception(AlpacaStreamError(f"Alpaca {config.stream_name} stream stopped before subscription"))
+
+
+def _report_terminal_failure(
+    error: AlpacaStreamError,
+    started: asyncio.Future[None],
+    on_terminated: Callable[[AlpacaStreamError], None] | None,
+) -> None:
+    if not started.done():
+        started.set_exception(error)
+    elif on_terminated is None:
+        raise error
+    else:
+        on_terminated(error)
 
 
 async def _read_connection[EventT](
@@ -318,27 +326,34 @@ async def _wait_for_ack[EventT](
             raise AlpacaStreamError(timeout_message) from error
         messages = _message_objects(payload)
         for index, message in enumerate(messages):
-            message_type = message.get("T")
-            if message_type == "error":
-                raise _server_error(config.stream_name, stage, message, config.api_key, config.api_secret)
-            if stage == "authentication" and message_type == "success":
-                response = message.get("msg")
-                if isinstance(response, str) and response.casefold() == "authenticated":
-                    return messages[:index] + messages[index + 1 :]
-            if stage == "subscription" and message_type == "subscription":
-                subscriptions = message.get("streams")
-                if not isinstance(subscriptions, dict):
-                    subscriptions = message
-                acknowledged = subscriptions.get(config.channel)
-                if (
-                    isinstance(acknowledged, list)
-                    and all(isinstance(symbol, str) for symbol in acknowledged)
-                    and set(config.symbols).issubset(acknowledged)
-                ):
-                    return messages[:index] + messages[index + 1 :]
-                detail = f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
-                raise AlpacaStreamError(detail)
+            if _is_acknowledgement(config, stage, message):
+                return messages[:index] + messages[index + 1 :]
     return None
+
+
+def _is_acknowledgement[EventT](config: _StreamConfig[EventT], stage: str, message: dict[str, object]) -> bool:
+    """Validate a stage acknowledgement, raising for server or subscription errors."""
+    message_type = message.get("T")
+    if message_type == "error":
+        raise _server_error(config.stream_name, stage, message, config.api_key, config.api_secret)
+    if stage == "authentication" and message_type == "success":
+        response = message.get("msg")
+        if isinstance(response, str) and response.casefold() == "authenticated":
+            return True
+    if stage == "subscription" and message_type == "subscription":
+        subscriptions = message.get("streams")
+        if not isinstance(subscriptions, dict):
+            subscriptions = message
+        acknowledged = subscriptions.get(config.channel)
+        if (
+            isinstance(acknowledged, list)
+            and all(isinstance(symbol, str) for symbol in acknowledged)
+            and set(config.symbols).issubset(acknowledged)
+        ):
+            return True
+        detail = f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
+        raise AlpacaStreamError(detail)
+    return False
 
 
 async def _read_events[EventT](
