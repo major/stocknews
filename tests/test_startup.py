@@ -41,6 +41,7 @@ DUMMY_FAILURE_CREDENTIALS = ("startup-failure-key", "startup-failure-secret")
 DUMMY_FAILURE_API_KEY, DUMMY_FAILURE_API_SECRET = DUMMY_FAILURE_CREDENTIALS
 DUMMY_REPR_CREDENTIALS = ("repr-test-key", "repr-test-secret")
 DUMMY_REPR_API_KEY, DUMMY_REPR_API_SECRET = DUMMY_REPR_CREDENTIALS
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STARTUP_TEST_LOGGER_NAMES = (
     "startup-stream-test",
     "startup-stock-termination-test",
@@ -776,7 +777,6 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
     try:
         assert server.sockets
         port = server.sockets[0].getsockname()[1]
-        repository = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
         environment.update(
             {
@@ -787,14 +787,14 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
                 "DISCORD_ANALYST_WEBHOOKS": "",
                 "DISCORD_EARNINGS_WEBHOOKS": "",
                 "DISCORD_NEWS_WEBHOOKS": "",
-                "PYTHONPATH": os.pathsep.join((str(repository / "src"), environment.get("PYTHONPATH", ""))),
+                "PYTHONPATH": os.pathsep.join((str(REPOSITORY_ROOT / "src"), environment.get("PYTHONPATH", ""))),
             }
         )
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
             "stocknews",
-            cwd=repository,
+            cwd=REPOSITORY_ROOT,
             env=environment,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -1058,7 +1058,6 @@ def test_cli_reports_initial_alpaca_connection_failure_with_exit_one() -> None:
         try:
             assert server.sockets
             port = server.sockets[0].getsockname()[1]
-            repository = Path(__file__).resolve().parents[1]
             environment = os.environ.copy()
             environment.update(
                 {
@@ -1069,14 +1068,14 @@ def test_cli_reports_initial_alpaca_connection_failure_with_exit_one() -> None:
                     "DISCORD_ANALYST_WEBHOOKS": "",
                     "DISCORD_EARNINGS_WEBHOOKS": "",
                     "DISCORD_NEWS_WEBHOOKS": "",
-                    "PYTHONPATH": os.pathsep.join((str(repository / "src"), environment.get("PYTHONPATH", ""))),
+                    "PYTHONPATH": os.pathsep.join((str(REPOSITORY_ROOT / "src"), environment.get("PYTHONPATH", ""))),
                 }
             )
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
                 "stocknews",
-                cwd=repository,
+                cwd=REPOSITORY_ROOT,
                 env=environment,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

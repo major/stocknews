@@ -889,10 +889,21 @@ async def _reject_upgrade(writer: asyncio.StreamWriter, status_code: int) -> Non
     await writer.drain()
 
 
-async def _wait_for_full_queue(queue: asyncio.Queue[object]) -> None:
+async def _wait_for_full_queue(queue: asyncio.Queue[object], monkeypatch: pytest.MonkeyPatch) -> None:
+    became_full = asyncio.Event()
+    if queue.full():
+        became_full.set()
+
+    put_nowait = queue.put_nowait
+
+    def observe_put(item: object) -> None:
+        put_nowait(item)
+        if queue.full():
+            became_full.set()
+
+    monkeypatch.setattr(queue, "put_nowait", observe_put)
     async with asyncio.timeout(2):
-        while not queue.full():
-            await asyncio.sleep(0)
+        await became_full.wait()
 
 
 class _PingFailureStream:
@@ -908,10 +919,12 @@ class _PingFailureStream:
         self._connection_number = connection_number
         self._failures = failures
 
-    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:  # noqa: ASYNC109
+        """Match the transport stream interface, including its timeout keyword."""
         return await self._stream.read(max_bytes, timeout)
 
-    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:  # noqa: ASYNC109
+        """Match the transport stream interface, including its timeout keyword."""
         if buffer and buffer[0] & 0x0F == Opcode.PING:
             if self._failure is not None:
                 failure, self._failure = self._failure, None
@@ -1567,7 +1580,7 @@ def test_loopback_stop_cancels_reconnect_backoff() -> None:
 
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
-def test_loopback_stop_cancels_when_bounded_queue_is_full() -> None:
+def test_loopback_stop_cancels_when_bounded_queue_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cancel the stream and close its socket when the event queue is full."""
 
     async def scenario() -> None:
@@ -1611,7 +1624,7 @@ def test_loopback_stop_cancels_when_bounded_queue_is_full() -> None:
                     ),
                     stop_event=stop_event,
                 )
-                await _wait_for_full_queue(cast("asyncio.Queue[object]", stream.events))
+                await _wait_for_full_queue(cast("asyncio.Queue[object]", stream.events), monkeypatch)
                 assert stream.events.qsize() == EXPECTED_EVENT_QUEUE_CAPACITY
                 stop_event.set()
                 await asyncio.wait_for(stream.task, timeout=2)
