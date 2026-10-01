@@ -82,6 +82,17 @@ async def run_application(
     stop_event: asyncio.Event,
     stock_starter: TradeStreamStarter | None = start_trade_stream,
 ) -> None:
+    """Run the news and optional stock streams until shutdown.
+
+    Set ``stop_event`` and await started stream tasks when the run exits.
+
+    Args:
+        config: Alpaca, Discord, and routing configuration.
+        client: HTTP client used by the streams and webhook delivery.
+        logger: Logger used for runtime events.
+        stop_event: Event used to stop the stream adapters.
+        stock_starter: Optional function that starts the stock stream.
+    """
     loop = asyncio.get_running_loop()
     news_terminated: asyncio.Future[AlpacaStreamError] = loop.create_future()
     stock_terminated: asyncio.Future[AlpacaStreamError] = loop.create_future()

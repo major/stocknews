@@ -21,6 +21,8 @@ from stocknews.models import NewsItem, Trade
 
 @pytest.mark.parametrize("wrapped_subscription", [False, True], ids=["flat-ack", "wrapped-ack"])
 def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscription: bool) -> None:
+    """Authenticate to the news stream, subscribe, and decode the delivered article."""
+
     async def scenario() -> None:
         requests: list[dict[str, object]] = []
 
@@ -91,6 +93,8 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
 
 
 def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reconnect after a trade-stream disconnect and resubscribe to IEX trades."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
         requests: list[dict[str, object]] = []
@@ -189,6 +193,13 @@ def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypat
 def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
     response: dict[str, object], diagnostic: str
 ) -> None:
+    """Keep credentials out of errors and tracebacks when initial trade authentication fails.
+
+    Args:
+        response: Authentication response sent by the provider.
+        diagnostic: Expected safe detail in the resulting error.
+    """
+
     async def scenario() -> None:
         async def app(
             scope: dict[str, object],
@@ -232,6 +243,12 @@ def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
 def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentials(
     failure: httpx2.TransportError,
 ) -> None:
+    """Report initial transport failures without leaking credentials or leaving tasks behind.
+
+    Args:
+        failure: Transport error raised before the WebSocket handshake.
+    """
+
     async def scenario() -> None:
         async def unreachable_app(
             scope: dict[str, object],
@@ -274,6 +291,8 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
 
 
 def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report an authentication timeout without leaving startup tasks behind."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "ACK_TIMEOUT_SECONDS", 0)
 
@@ -315,6 +334,13 @@ def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkey
     ids=["malformed-json", "invalid-message-shape"],
 )
 def test_invalid_handshake_messages_fail_startup(response: str, diagnostic: str) -> None:
+    """Reject malformed or unsupported messages received during the handshake.
+
+    Args:
+        response: Invalid handshake message sent by the provider.
+        diagnostic: Expected explanation in the startup error.
+    """
+
     async def scenario() -> None:
         async def app(
             scope: dict[str, object],
@@ -340,6 +366,8 @@ def test_invalid_handshake_messages_fail_startup(response: str, diagnostic: str)
 
 
 def test_malformed_established_message_terminates_the_stream() -> None:
+    """Report malformed JSON after subscription as a terminal stream error."""
+
     async def scenario() -> None:
         connection_count = 0
 
@@ -379,6 +407,8 @@ def test_malformed_established_message_terminates_the_stream() -> None:
 
 
 def test_unexpected_binary_message_terminates_the_stream() -> None:
+    """Report binary data on the news stream as a terminal stream error."""
+
     async def scenario() -> None:
         connection_count = 0
 
@@ -423,6 +453,14 @@ def test_unexpected_binary_message_terminates_the_stream() -> None:
     ids=["author-type", "symbols-type"],
 )
 def test_invalid_news_field_terminates_established_stream(field: str, value: object, diagnostic: str) -> None:
+    """Terminate the news stream when an article field has an invalid value.
+
+    Args:
+        field: News field to populate with an invalid value.
+        value: Invalid field value sent by the provider.
+        diagnostic: Expected field name in the terminal error.
+    """
+
     async def scenario() -> None:
         async def app(
             scope: dict[str, object],
@@ -486,6 +524,14 @@ def test_invalid_news_field_terminates_established_stream(field: str, value: obj
     ],
 )
 def test_invalid_trade_number_terminates_established_stream(field: str, value: object, diagnostic: str) -> None:
+    """Terminate the trade stream when a numeric field has an invalid value.
+
+    Args:
+        field: Trade field to populate with an invalid number.
+        value: Invalid numeric value sent by the provider.
+        diagnostic: Expected field name in the terminal error.
+    """
+
     async def scenario() -> None:
         async def app(
             scope: dict[str, object],
@@ -521,6 +567,8 @@ def test_invalid_trade_number_terminates_established_stream(field: str, value: o
 
 
 def test_terminal_protocol_error_without_callback_raises_from_stream_task() -> None:
+    """Propagate terminal provider errors from the stream task without a callback."""
+
     async def scenario() -> None:
         async def app(
             scope: dict[str, object],
@@ -550,6 +598,8 @@ def test_terminal_protocol_error_without_callback_raises_from_stream_task() -> N
 
 
 def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None:
+    """Skip connection setup and avoid task leaks when shutdown is already requested."""
+
     async def scenario() -> None:
         connection_count = 0
 
@@ -580,6 +630,8 @@ def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None
 
 
 def test_established_subscription_failure_uses_terminal_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report resubscription failures through the callback without setting the stop event."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
         requests: list[dict[str, object]] = []
@@ -806,6 +858,8 @@ class _PingFailureTransport(ASGIWebSocketTransport):
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
+    """Deliver a large news article sent in the subscription acknowledgment batch."""
+
     async def scenario() -> None:
         requests: list[dict[str, object]] = []
         summary = "A" * 70_100
@@ -865,6 +919,12 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
     ids=["missing-requested-symbol", "wrong-acknowledgement-type", "non-text-symbol"],
 )
 def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: object) -> None:
+    """Reject trade subscriptions that do not acknowledge every requested symbol.
+
+    Args:
+        acknowledged: Symbols or malformed data returned in the acknowledgment.
+    """
+
     async def scenario() -> None:
         async def handler(
             _: int,
@@ -895,6 +955,8 @@ def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: 
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry an established 503 response, then terminate on a 401 response."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
         requests: list[dict[str, object]] = []
@@ -958,6 +1020,12 @@ def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 @pytest.mark.parametrize("status_code", [401, 503])
 def test_loopback_initial_upgrade_failure_remains_a_startup_failure(status_code: int) -> None:
+    """Treat an initial WebSocket upgrade rejection as a startup error.
+
+    Args:
+        status_code: HTTP status returned for the rejected upgrade.
+    """
+
     async def scenario() -> None:
         async def handler(
             _: int,
@@ -985,6 +1053,8 @@ def test_loopback_initial_upgrade_failure_remains_a_startup_failure(status_code:
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_acknowledgement_timeout_covers_the_entire_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Apply one timeout across the full authentication acknowledgment stage."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "ACK_TIMEOUT_SECONDS", 0.6)
         heartbeat_count = 0
@@ -1024,6 +1094,8 @@ def test_loopback_acknowledgement_timeout_covers_the_entire_stage(monkeypatch: p
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reconnect after keepalive failure, reauthenticate, and resubscribe."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_INTERVAL_SECONDS", 0.01)
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_TIMEOUT_SECONDS", 0.05)
@@ -1089,6 +1161,13 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
     monkeypatch: pytest.MonkeyPatch,
     network_error: type[Exception],
 ) -> None:
+    """Reconnect and resubscribe after an injected keepalive write failure.
+
+    Args:
+        monkeypatch: Fixture used to set the keepalive and reconnect timing.
+        network_error: Write error type injected into the ping operation.
+    """
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_INTERVAL_SECONDS", 0.5)
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_TIMEOUT_SECONDS", 0.5)
@@ -1142,6 +1221,8 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
 def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Terminate on mixed ping failures without exposing secrets in exception output."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_INTERVAL_SECONDS", 0.5)
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
@@ -1201,6 +1282,8 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_oversized_message_is_terminal_with_1009_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Terminate oversized news messages with a WebSocket 1009 diagnostic."""
+
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "MAX_MESSAGE_SIZE_BYTES", 1024)
 
@@ -1242,6 +1325,8 @@ def test_loopback_oversized_message_is_terminal_with_1009_diagnostic(monkeypatch
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
+    """Cancel startup during authentication and close the pending socket."""
+
     async def scenario() -> None:
         auth_received = asyncio.Event()
         socket_closed = asyncio.Event()
@@ -1300,6 +1385,8 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_stop_cancels_reconnect_backoff() -> None:
+    """Cancel reconnect backoff promptly when shutdown is requested."""
+
     async def scenario() -> None:
         class ObservedStopEvent(asyncio.Event):
             def __init__(self) -> None:
@@ -1349,6 +1436,8 @@ def test_loopback_stop_cancels_reconnect_backoff() -> None:
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_loopback_stop_cancels_when_bounded_queue_is_full() -> None:
+    """Cancel the stream and close its socket when the event queue is full."""
+
     async def scenario() -> None:
         socket_closed = asyncio.Event()
 
@@ -1397,6 +1486,8 @@ def test_loopback_stop_cancels_when_bounded_queue_is_full() -> None:
 
 
 def test_stop_event_closes_an_established_idle_news_stream() -> None:
+    """Close an idle established news stream when shutdown is requested."""
+
     async def scenario() -> None:
         subscribed = asyncio.Event()
         socket_closed = asyncio.Event()
@@ -1461,6 +1552,14 @@ def test_initial_websocket_disconnect_reports_a_safe_diagnostic(
     reason: str,
     expected_detail: str,
 ) -> None:
+    """Sanitize the initial disconnect diagnostic and redact supplied credentials.
+
+    Args:
+        api_secret: Credential that may appear in the provider's close reason.
+        reason: Close reason supplied by the provider.
+        expected_detail: Expected sanitized detail in the startup error.
+    """
+
     async def scenario() -> None:
         async def handler(
             _: int,
@@ -1494,6 +1593,8 @@ def test_initial_websocket_disconnect_reports_a_safe_diagnostic(
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_initial_loopback_socket_reset_fails_stream_startup() -> None:
+    """Treat a socket reset during initial setup as a safe startup failure."""
+
     async def scenario() -> None:
         async def handler(
             _: int,

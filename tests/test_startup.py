@@ -35,6 +35,7 @@ def test_startup_logs_commit_before_missing_configuration(
     git_sha: str | None,
     expected_commit: str,
 ) -> None:
+    """Verify startup logs the commit before reporting missing configuration."""
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
     if git_sha is None:
@@ -68,6 +69,8 @@ def test_run_application_drains_queued_news_when_stock_stream_reaches_eof(
     stock_completion: str,
     expect_trade: bool,
 ) -> None:
+    """Verify stock EOF drains queued news and any final trade."""
+
     async def scenario() -> None:
         delivery_started = asyncio.Event()
         release_delivery = asyncio.Event()
@@ -220,6 +223,8 @@ def test_run_application_drains_queued_news_when_stock_stream_reaches_eof(
 
 
 def test_run_application_shuts_down_on_termination_immediately_after_subscription() -> None:
+    """Verify immediate stream termination shuts down without exposing credentials."""
+
     async def scenario() -> None:
         disconnected = asyncio.Event()
 
@@ -276,6 +281,8 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
 
 
 def test_run_application_fails_on_terminated_stock_handle_while_news_is_open() -> None:
+    """Verify a terminated stock handle fails and closes the active news stream."""
+
     async def scenario() -> None:
         news_subscribed = asyncio.Event()
         news_disconnected = asyncio.Event()
@@ -388,6 +395,8 @@ def test_run_application_fails_on_terminated_stock_handle_while_news_is_open() -
     ids=["after-subscription", "during-authentication"],
 )
 def test_sigterm_stops_real_news_and_trade_streams_cleanly(stop_during_authentication: bool) -> None:
+    """Verify SIGTERM stops both streams during authentication or after subscription."""
+
     async def scenario() -> None:
         subscribed_streams: set[str] = set()
         authentication_streams: set[str] = set()
@@ -563,6 +572,8 @@ def test_sigterm_stops_real_news_and_trade_streams_cleanly(stop_during_authentic
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 def test_cli_reports_initial_alpaca_connection_failure_with_exit_one() -> None:
+    """Verify an initial Alpaca connection failure exits with status one."""
+
     async def scenario() -> None:
         connection_tasks: set[asyncio.Task[None]] = set()
 

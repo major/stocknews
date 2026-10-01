@@ -103,6 +103,8 @@ def _payload_title(payload: object) -> str:
 
 
 def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
+    """Verify news classification produces the expected Discord payloads."""
+
     async def scenario() -> None:
         sent: dict[str, dict[str, object]] = {}
 
@@ -185,6 +187,8 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
 
 @pytest.mark.parametrize("shutdown_mode", ["cancel", "stop-event"], ids=["task-cancellation", "external-stop"])
 def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(shutdown_mode: str) -> None:
+    """Verify shutdown closes the news adapter and handles queued delivery."""
+
     async def scenario() -> None:
         connected = asyncio.Event()
         disconnected = asyncio.Event()
@@ -293,6 +297,8 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
 
 @pytest.mark.parametrize("reject_stock_auth", [False, True], ids=["delayed-auth", "initial-auth-failure"])
 def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth: bool) -> None:
+    """Verify news continues while the stock stream connects or fails auth."""
+
     async def scenario() -> None:
         stock_auth_started = asyncio.Event()
         release_stock_auth = asyncio.Event()
@@ -412,6 +418,8 @@ def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth:
     ids=["news-late", "stock-late", "news-before-consumer"],
 )
 def test_established_real_alpaca_stream_errors_fail_the_application(failed_stream: str, terminal_timing: str) -> None:
+    """Verify terminal errors from established streams fail the application."""
+
     async def scenario() -> None:
         subscribed_streams: set[str] = set()
         both_subscribed = asyncio.Event()
@@ -504,6 +512,8 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
 
 
 def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
+    """Verify cancellation closes both adapters and cancels delivery."""
+
     async def scenario() -> None:
         first_request_started = asyncio.Event()
         release_request = asyncio.Event()
@@ -621,6 +631,8 @@ def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
 
 
 def test_stock_connection_failure_warns_while_news_continues() -> None:
+    """Verify a stock connection failure is logged while news is delivered."""
+
     async def scenario() -> None:
         stock_started = asyncio.Event()
         output = StringIO()
@@ -660,6 +672,8 @@ def test_stock_connection_failure_warns_while_news_continues() -> None:
 
 
 def test_news_runs_while_stock_connection_is_pending() -> None:
+    """Verify news runs while the stock connection is pending."""
+
     async def scenario() -> None:
         stock_started = asyncio.Event()
         stock_stopped = asyncio.Event()
@@ -700,6 +714,8 @@ def test_news_runs_while_stock_connection_is_pending() -> None:
 
 
 def test_established_stock_stream_failure_is_fatal_and_trade_is_logged() -> None:
+    """Verify an established stock stream failure is fatal and logs its trade."""
+
     async def scenario() -> None:
         output = StringIO()
         never = asyncio.Event()
@@ -749,6 +765,8 @@ def test_established_stock_stream_failure_is_fatal_and_trade_is_logged() -> None
 
 
 def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> None:
+    """Verify a stream failure closes an iterator suspended after its final item."""
+
     async def scenario() -> None:
         first_delivery_started = asyncio.Event()
         second_news_yielded = asyncio.Event()
@@ -806,6 +824,8 @@ def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> No
 
 
 def test_webhook_fanout_logs_failures_without_exposing_tokens() -> None:
+    """Verify webhook failures are logged without exposing webhook tokens."""
+
     async def scenario() -> None:
         output = StringIO()
         failed_webhook = "https://discord.test/api/webhooks/fail/secret-fail"
@@ -897,6 +917,8 @@ def test_webhook_fanout_logs_failures_without_exposing_tokens() -> None:
 
 
 def test_normal_stream_completion_drains_queued_discord_deliveries() -> None:
+    """Verify normal stream completion waits for queued Discord deliveries."""
+
     async def scenario() -> None:
         request_started = asyncio.Event()
         stream_exhausted = asyncio.Event()
@@ -934,6 +956,8 @@ def test_normal_stream_completion_drains_queued_discord_deliveries() -> None:
 
 
 def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
+    """Verify stock EOF logs its trade and drains queued news delivery."""
+
     async def scenario() -> None:
         request_started = asyncio.Event()
         release_request = asyncio.Event()
@@ -1001,6 +1025,8 @@ def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
 
 
 def test_cancellation_during_iterator_close_cancels_delivery_before_close_finishes() -> None:
+    """Verify cancellation stops delivery before iterator cleanup finishes."""
+
     async def scenario() -> None:
         request_started = asyncio.Event()
         iterator_close_started = asyncio.Event()
@@ -1082,6 +1108,8 @@ def test_cancellation_during_iterator_close_cancels_delivery_before_close_finish
 
 
 def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
+    """Verify normal EOF reports iterator cleanup errors without credentials."""
+
     async def scenario() -> None:
         stock_connected = asyncio.Event()
         stock_closed = asyncio.Event()
@@ -1130,6 +1158,8 @@ def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
 
 
 def test_cancellation_during_normal_delivery_drain_cancels_http_request() -> None:
+    """Verify cancellation during delivery draining cancels the HTTP request."""
+
     async def scenario() -> None:
         request_started = asyncio.Event()
         stream_exhausted = asyncio.Event()
@@ -1174,6 +1204,8 @@ def test_cancellation_during_normal_delivery_drain_cancels_http_request() -> Non
 
 
 def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify cleanup errors do not hide stream failures or expose credentials."""
+
     async def scenario() -> None:
         news_iterator_closed = asyncio.Event()
         never = asyncio.Event()
@@ -1237,6 +1269,8 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
     ],
 )
 def test_classified_news_without_payload_is_logged_and_not_delivered(headline: str, kind: str) -> None:
+    """Verify classified news without a payload is logged and not delivered."""
+
     async def scenario() -> None:
         posts: list[str] = []
         output = StringIO()
@@ -1265,6 +1299,8 @@ def test_classified_news_without_payload_is_logged_and_not_delivered(headline: s
 
 
 def test_repeated_cancellation_cancels_delivery_worker() -> None:
+    """Verify repeated cancellation stops the delivery worker and pending tasks."""
+
     async def scenario() -> None:
         first_request_started = asyncio.Event()
         second_delivery_queued = asyncio.Event()
@@ -1346,6 +1382,8 @@ def test_repeated_cancellation_cancels_delivery_worker() -> None:
 
 
 def test_full_delivery_queue_fails_runtime_without_waiting() -> None:
+    """Verify a full delivery queue fails without waiting for the active request."""
+
     async def scenario() -> None:
         request_started = asyncio.Event()
         release_request = asyncio.Event()

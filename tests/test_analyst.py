@@ -1,3 +1,5 @@
+"""Tests for parsing analyst-rating headlines."""
+
 import pytest
 
 from stocknews.analyst import parse_analyst
@@ -62,6 +64,7 @@ def test_parse_analyst_headline(
     price_action: str,
     price: float,
 ) -> None:
+    """Parse analyst action, rating, stock, and price fields from headlines."""
     result = parse_analyst(headline)
 
     assert (result.firm, result.action, result.guidance, result.stock) == (firm, action, guidance, stock)
@@ -70,6 +73,7 @@ def test_parse_analyst_headline(
 
 
 def test_parse_analyst_strips_rating_suffix() -> None:
+    """Exclude the word Rating from parsed guidance."""
     result = parse_analyst("UBS Downgrades Microsoft to Neutral Rating, Lowers Price Target to $275")
 
     assert result.guidance == "Neutral"
@@ -77,12 +81,14 @@ def test_parse_analyst_strips_rating_suffix() -> None:
 
 
 def test_parse_analyst_uses_first_dollar_price() -> None:
+    """Use the first dollar amount as the parsed price target."""
     result = parse_analyst("Goldman Sachs Maintains Buy on Apple $10, Raises Price Target to $223")
 
     assert result.price_target == 10.0
 
 
 def test_parse_analyst_action_is_case_insensitive_but_price_action_is_not() -> None:
+    """Match analyst actions without regard to case but preserve price-action case."""
     result = parse_analyst("Baird upgrades Apple to Outperform, raises Price Target to $200")
 
     assert result.action == "upgrades"
@@ -91,6 +97,7 @@ def test_parse_analyst_action_is_case_insensitive_but_price_action_is_not() -> N
 
 
 def test_parse_analyst_requires_action_at_start_of_headline() -> None:
+    """Leave analyst fields empty when the headline does not start with an action."""
     result = parse_analyst("News: Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223")
 
     assert (result.firm, result.action, result.guidance, result.stock) == ("", "", "", "")
