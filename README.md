@@ -34,6 +34,13 @@ uv sync --locked
 uv run stocknews
 ```
 
+The startup banner shows the commit SHA from `GIT_SHA`, or `unknown` when no
+SHA is provided. To show the current commit when running locally:
+
+```bash
+GIT_SHA=$(git rev-parse HEAD) uv run stocknews
+```
+
 ## Containers
 
 ```bash
@@ -42,6 +49,12 @@ podman compose up --build
 
 The container uses a pinned UBI 9 Python 3.14 image, installs the locked runtime
 dependencies only, and runs as a non-root user.
+For a manual build with the current commit in the startup banner, pass the SHA
+as a build argument:
+
+```bash
+podman build --build-arg GIT_SHA="$(git rev-parse HEAD)" -t stocknews .
+```
 
 ## Gates
 

@@ -18,6 +18,7 @@ WORKDIR /opt/app-root/src
 COPY --from=builder --chown=1001:0 /opt/app-root/src/.venv /opt/app-root/src/.venv
 
 ENV PATH="/opt/app-root/src/.venv/bin:${PATH}"
+ENV GIT_SHA="${GIT_SHA}"
 
 USER 1001:0
 ENTRYPOINT ["/opt/app-root/src/.venv/bin/stocknews"]

@@ -20,21 +20,39 @@ from stocknews.alpaca import AlpacaStreamError, StreamHandle
 from stocknews.models import Config, Trade
 
 
-def test_startup_reports_missing_credentials_as_json(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("git_sha", "expected_commit"),
+    [
+        ("0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567"),
+        (None, "unknown"),
+        ("", "unknown"),
+    ],
+    ids=["deployed-commit", "unset-commit", "empty-commit"],
+)
+def test_startup_logs_commit_before_missing_configuration(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    git_sha: str | None,
+    expected_commit: str,
 ) -> None:
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    if git_sha is None:
+        monkeypatch.delenv("GIT_SHA", raising=False)
+    else:
+        monkeypatch.setenv("GIT_SHA", git_sha)
 
     with pytest.raises(SystemExit) as error:
         main()
 
     assert error.value.code == 2
-    output = capsys.readouterr().out
-    record = json.loads(output)
-    assert record["level"] == "ERROR"
-    assert record["msg"] == "invalid configuration"
-    assert record["error"] == "ALPACA_API_KEY is required"
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(records) == 2
+    assert records[0]["msg"] == "starting stocknews"
+    assert records[0]["commit"] == expected_commit
+    assert records[1]["level"] == "ERROR"
+    assert records[1]["msg"] == "invalid configuration"
+    assert records[1]["error"] == "ALPACA_API_KEY is required"
 
 
 @pytest.mark.parametrize(
