@@ -5,7 +5,7 @@ import logging
 import os
 import signal
 from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import cast
+from typing import Protocol, cast
 
 import httpx2
 
@@ -17,10 +17,23 @@ from stocknews.alpaca import (
 )
 from stocknews.config import load_config
 from stocknews.logging import configure_logging
-from stocknews.models import Config, NewsItem, Trade
+from stocknews.models import AlpacaSettings, Config, NewsItem, Trade
 from stocknews.runtime import run
 
-type TradeStreamStarter = Callable[..., Awaitable[StreamHandle[Trade]]]
+
+class TradeStreamStarter(Protocol):
+    """Start a trade stream with shared Alpaca settings and shutdown signals."""
+
+    def __call__(
+        self,
+        client: httpx2.AsyncClient,
+        *,
+        settings: AlpacaSettings,
+        stop_event: asyncio.Event,
+        on_terminated: Callable[[AlpacaStreamError], None] | None = None,
+    ) -> Awaitable[StreamHandle[Trade]]:
+        """Return an awaitable that initializes the trade stream handle."""
+        ...
 
 
 async def _cancel_and_wait[T](task: asyncio.Task[T]) -> None:
@@ -94,6 +107,12 @@ async def run_application(
         stock_starter: Optional function that starts the stock stream.
     """
     loop = asyncio.get_running_loop()
+    settings = AlpacaSettings(
+        api_key=config.alpaca_api_key,
+        api_secret=config.alpaca_api_secret,
+        news_stream_url=config.alpaca_news_stream_url,
+        stock_stream_url=config.alpaca_stock_stream_url,
+    )
     news_terminated: asyncio.Future[AlpacaStreamError] = loop.create_future()
     stock_terminated: asyncio.Future[AlpacaStreamError] = loop.create_future()
     handles: list[StreamHandle[NewsItem] | StreamHandle[Trade]] = []
@@ -109,9 +128,7 @@ async def run_application(
     async def connect_news() -> AsyncIterable[NewsItem]:
         handle = await start_news_stream(
             client,
-            url=config.alpaca_news_stream_url,
-            api_key=config.alpaca_api_key,
-            api_secret=config.alpaca_api_secret,
+            settings=settings,
             stop_event=stop_event,
             on_terminated=terminate_news,
         )
@@ -124,9 +141,7 @@ async def run_application(
         async def connect_stock() -> AsyncIterable[Trade]:
             handle = await stock_starter(
                 client,
-                base_url=config.alpaca_stock_stream_url,
-                api_key=config.alpaca_api_key,
-                api_secret=config.alpaca_api_secret,
+                settings=settings,
                 stop_event=stop_event,
                 on_terminated=terminate_stock,
             )

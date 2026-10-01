@@ -20,7 +20,7 @@ from httpx2.websockets import (
     WebSocketUpgradeError,
 )
 
-from .models import NewsItem, Trade
+from .models import AlpacaSettings, NewsItem, Trade
 
 __all__ = [
     "AlpacaStreamError",
@@ -36,6 +36,8 @@ KEEPALIVE_PING_INTERVAL_SECONDS = 20
 KEEPALIVE_PING_TIMEOUT_SECONDS = 20
 MAX_MESSAGE_SIZE_BYTES = 16 * 1024 * 1024
 UINT32_MAX = 2**32 - 1
+WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
+HTTP_SERVER_ERROR_STATUS_CODE = 500
 
 EventT = TypeVar("EventT")
 
@@ -84,9 +86,7 @@ class _TerminalFailure:
 async def start_news_stream(
     client: httpx2.AsyncClient,
     *,
-    url: str,
-    api_key: str,
-    api_secret: str,
+    settings: AlpacaSettings,
     stop_event: asyncio.Event,
     on_terminated: Callable[[AlpacaStreamError], None] | None = None,
 ) -> StreamHandle[NewsItem]:
@@ -97,7 +97,16 @@ async def start_news_stream(
     without a callback they are raised by the returned task.
     """
     return await _start_stream(
-        _StreamConfig(client, url, api_key, api_secret, "news", "news", ("*",), _parse_news),
+        _StreamConfig(
+            client,
+            settings.news_stream_url,
+            settings.api_key,
+            settings.api_secret,
+            "news",
+            "news",
+            ("*",),
+            _parse_news,
+        ),
         stop_event,
         on_terminated=on_terminated,
     )
@@ -106,20 +115,25 @@ async def start_news_stream(
 async def start_trade_stream(
     client: httpx2.AsyncClient,
     *,
-    base_url: str,
-    api_key: str,
-    api_secret: str,
+    settings: AlpacaSettings,
     stop_event: asyncio.Event,
     on_terminated: Callable[[AlpacaStreamError], None] | None = None,
 ) -> StreamHandle[Trade]:
     """Start the IEX trades stream and return after its first subscription.
 
-    ``base_url`` is Alpaca's configured stock stream URL, normally ending in
-    ``/v2``. The IEX feed path is appended as the Go SDK does.
+    ``settings.stock_stream_url`` is Alpaca's configured stock stream URL,
+    normally ending in ``/v2``. The IEX feed path is appended as the Go SDK does.
     """
     return await _start_stream(
         _StreamConfig(
-            client, f"{base_url.rstrip('/')}/iex", api_key, api_secret, "trades", "trades", ("SPY", "QQQ"), _parse_trade
+            client,
+            f"{settings.stock_stream_url.rstrip('/')}/iex",
+            settings.api_key,
+            settings.api_secret,
+            "trades",
+            "trades",
+            ("SPY", "QQQ"),
+            _parse_trade,
         ),
         stop_event,
         on_terminated=on_terminated,
@@ -364,9 +378,9 @@ def _is_retryable_transport_error(error: BaseException, established: bool) -> bo
             _is_retryable_transport_error(child, established) for child in error.exceptions
         )
     if isinstance(error, WebSocketDisconnect):
-        return error.code != 1009
+        return error.code != WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE
     if isinstance(error, WebSocketUpgradeError):
-        return established and error.response.status_code >= 500
+        return established and error.response.status_code >= HTTP_SERVER_ERROR_STATUS_CODE
     return isinstance(
         error,
         (
@@ -463,7 +477,7 @@ def _stream_failure(
     if isinstance(error, WebSocketUpgradeError):
         detail = f"WebSocket upgrade rejected with HTTP {error.response.status_code}"
     elif isinstance(error, WebSocketDisconnect):
-        if error.code == 1009:
+        if error.code == WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE:
             detail = f"WebSocket message exceeded the configured maximum size (code {error.code})"
         else:
             reason = _redact(error.reason, api_key, api_secret)

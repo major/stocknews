@@ -20,6 +20,7 @@ from stocknews.runtime import run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
+_EXPECTED_ALPACA_STREAM_NAMES = frozenset({"news", "stock"})
 type ASGIReceive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 type ASGISend = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 
@@ -36,6 +37,279 @@ class _RoutedTransport(httpx2.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         pass
+
+
+class _ShutdownNewsASGIApp:
+    def __init__(self) -> None:
+        self.connected = asyncio.Event()
+        self.disconnected = asyncio.Event()
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
+        assert scope.get("path") == "/v1beta1/news"
+        await receive()
+        await send({"type": "websocket.accept"})
+        while True:
+            incoming = await receive()
+            if incoming.get("type") == "websocket.disconnect":
+                self.disconnected.set()
+                return
+            text = incoming.get("text")
+            assert isinstance(text, str)
+            message = json.loads(text)
+            if message["action"] == "auth":
+                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
+                continue
+            await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
+            await _send_websocket_json(
+                send,
+                {
+                    "T": "n",
+                    "symbols": [" AAPL "],
+                    "author": "Benzinga Newsdesk",
+                    "headline": "Apple &amp;amp; launches a phone",
+                    "summary": "Company announcement",
+                    "url": "https://example.test/news",
+                },
+            )
+            self.connected.set()
+
+
+class _ShutdownDiscordHandler:
+    def __init__(self, shutdown_mode: str) -> None:
+        self.shutdown_mode = shutdown_mode
+        self.delivered = asyncio.Event()
+        self.release_delivery = asyncio.Event()
+        self.delivery_cancelled = asyncio.Event()
+        self.received_payloads: list[dict[str, object]] = []
+
+    async def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.received_payloads.append(json.loads(request.content))
+        self.delivered.set()
+        if self.shutdown_mode == "stop-event":
+            try:
+                await self.release_delivery.wait()
+            except asyncio.CancelledError:
+                self.delivery_cancelled.set()
+                raise
+        return httpx2.Response(204)
+
+
+class _StockConnectASGIApp:
+    def __init__(self, reject_stock_auth: bool) -> None:
+        self.reject_stock_auth = reject_stock_auth
+        self.stock_auth_started = asyncio.Event()
+        self.release_stock_auth = asyncio.Event()
+        self.stock_subscribed = asyncio.Event()
+        self.news_subscribed = asyncio.Event()
+        self.news_disconnected = asyncio.Event()
+        self.stock_disconnected = asyncio.Event()
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
+        path = scope.get("path")
+        assert isinstance(path, str)
+        is_news = path.endswith("/news")
+        await receive()
+        await send({"type": "websocket.accept"})
+        while True:
+            incoming = await receive()
+            if incoming.get("type") == "websocket.disconnect":
+                (self.news_disconnected if is_news else self.stock_disconnected).set()
+                return
+            text = incoming.get("text")
+            assert isinstance(text, str)
+            request = json.loads(text)
+            if request["action"] == "auth":
+                if not is_news:
+                    self.stock_auth_started.set()
+                    if self.reject_stock_auth:
+                        await _send_websocket_json(
+                            send,
+                            {"T": "error", "code": 401, "msg": "invalid private-api-key and private-secret"},
+                        )
+                        continue
+                    await self.release_stock_auth.wait()
+                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
+                continue
+
+            if is_news:
+                await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
+                await _send_websocket_json(
+                    send,
+                    {
+                        "T": "n",
+                        "symbols": ["AAPL"],
+                        "author": "Benzinga Newsdesk",
+                        "headline": "Apple launches a phone",
+                    },
+                )
+                self.news_subscribed.set()
+            else:
+                await _send_websocket_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+                self.stock_subscribed.set()
+
+
+class _EstablishedStreamFailureASGIApp:
+    def __init__(self, failed_stream: str, terminal_timing: str) -> None:
+        self.failed_stream = failed_stream
+        self.terminal_timing = terminal_timing
+        self.subscribed_streams: set[str] = set()
+        self.both_subscribed = asyncio.Event()
+        self.report_terminal_error = asyncio.Event()
+        self.disconnected_streams: set[str] = set()
+        self.both_disconnected = asyncio.Event()
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
+        path = scope.get("path")
+        assert isinstance(path, str)
+        stream_name = "news" if path.endswith("/news") else "stock"
+        channel = "news" if stream_name == "news" else "trades"
+        await receive()
+        await send({"type": "websocket.accept"})
+        while True:
+            incoming = await receive()
+            if incoming.get("type") == "websocket.disconnect":
+                self.disconnected_streams.add(stream_name)
+                if self.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES:
+                    self.both_disconnected.set()
+                return
+            text = incoming.get("text")
+            assert isinstance(text, str)
+            request = json.loads(text)
+            if request["action"] == "auth":
+                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
+                continue
+            subscriptions = ["*"] if channel == "news" else ["SPY", "QQQ"]
+            subscription = {"T": "subscription", channel: subscriptions}
+            if stream_name == self.failed_stream and self.terminal_timing == "before-consumer":
+                await _send_websocket_json(
+                    send,
+                    [subscription, {"T": "error", "code": 403, "msg": "request rejected using private-api-key"}],
+                )
+            else:
+                await _send_websocket_json(send, subscription)
+            self.subscribed_streams.add(stream_name)
+            if self.subscribed_streams == _EXPECTED_ALPACA_STREAM_NAMES:
+                self.both_subscribed.set()
+            if stream_name == self.failed_stream and self.terminal_timing == "late":
+                await self.report_terminal_error.wait()
+                await _send_websocket_json(
+                    send,
+                    {"T": "error", "code": 403, "msg": "request rejected using private-api-key"},
+                )
+
+
+class _CancellationASGIApp:
+    def __init__(self) -> None:
+        self.disconnected_streams: set[str] = set()
+        self.all_disconnected = asyncio.Event()
+        self.stock_subscribed = asyncio.Event()
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
+        path = scope.get("path")
+        assert isinstance(path, str)
+        stream_name = "news" if path.endswith("/news") else "stock"
+        await receive()
+        await send({"type": "websocket.accept"})
+        while True:
+            incoming = await receive()
+            if incoming.get("type") == "websocket.disconnect":
+                self.disconnected_streams.add(stream_name)
+                if self.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES:
+                    self.all_disconnected.set()
+                return
+            text = incoming.get("text")
+            assert isinstance(text, str)
+            request = json.loads(text)
+            if request["action"] == "auth":
+                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
+                continue
+            if stream_name == "stock":
+                await _send_websocket_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+                self.stock_subscribed.set()
+                continue
+            await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
+            for headline, author in (
+                ("Apple launches a phone", "Benzinga Newsdesk"),
+                ("Microsoft launches a tablet", "Benzinga Newsdesk"),
+                ("unrouted item", "Other Newsdesk"),
+            ):
+                await _send_websocket_json(
+                    send,
+                    {"T": "n", "symbols": ["AAPL"], "author": author, "headline": headline},
+                )
+
+
+class _CancellationDiscordHandler:
+    def __init__(self) -> None:
+        self.first_request_started = asyncio.Event()
+        self.release_request = asyncio.Event()
+        self.sender_cancelled = asyncio.Event()
+        self.requested_titles: list[str] = []
+
+    async def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        title = _payload_title(json.loads(request.content))
+        if title == "AAPL: Apple launches a phone":
+            self.first_request_started.set()
+            try:
+                await self.release_request.wait()
+            except asyncio.CancelledError:
+                self.sender_cancelled.set()
+                raise
+        self.requested_titles.append(title)
+        return httpx2.Response(204)
+
+
+class _RepeatedCancellationNewsStream:
+    def __init__(self, first_request_started: asyncio.Event) -> None:
+        self.first_request_started = first_request_started
+        self.second_delivery_queued = asyncio.Event()
+        self.stream_cancelled = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[NewsItem]:
+        try:
+            yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
+            await self.first_request_started.wait()
+            yield NewsItem(symbols=("MSFT",), author="Benzinga Newsdesk", headline="Microsoft launches a tablet")
+            self.second_delivery_queued.set()
+            await asyncio.Event().wait()
+        finally:
+            self.stream_cancelled.set()
+
+
+class _RepeatedCancellationDiscordHandler:
+    def __init__(self) -> None:
+        self.first_request_started = asyncio.Event()
+        self.release_request = asyncio.Event()
+        self.sender_cancelled = asyncio.Event()
+        self.delivered: list[str] = []
+
+    async def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        title = _payload_title(json.loads(request.content))
+        self.first_request_started.set()
+        try:
+            await self.release_request.wait()
+        except asyncio.CancelledError:
+            self.sender_cancelled.set()
+            raise
+        self.delivered.append(title)
+        return httpx2.Response(204)
+
+
+class _StringableWebhook:
+    def __str__(self) -> str:
+        return "https://discord.test/api/webhooks/nested/secret-nested"
+
+
+def _tasks_started_after(existing_tasks: set[asyncio.Task[Any]]) -> set[asyncio.Task[Any]]:
+    return {task for task in asyncio.all_tasks() if task not in existing_tasks and task is not asyncio.current_task()}
+
+
+async def _cancel_tasks_started_after(existing_tasks: set[asyncio.Task[Any]]) -> None:
+    tasks = _tasks_started_after(existing_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class _LogMessageEvent(logging.Handler):
@@ -190,59 +464,8 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
     """Verify shutdown closes the news adapter and handles queued delivery."""
 
     async def scenario() -> None:
-        connected = asyncio.Event()
-        disconnected = asyncio.Event()
-        discord_delivered = asyncio.Event()
-        release_delivery = asyncio.Event()
-        delivery_cancelled = asyncio.Event()
-        received_payloads: list[dict[str, object]] = []
-
-        async def alpaca_app(
-            scope: MutableMapping[str, Any],
-            receive: ASGIReceive,
-            send: ASGISend,
-        ) -> None:
-            path = scope.get("path")
-            assert path == "/v1beta1/news"
-            await receive()
-            await send({"type": "websocket.accept"})
-            while True:
-                incoming = await receive()
-                if incoming.get("type") == "websocket.disconnect":
-                    disconnected.set()
-                    return
-                text = incoming.get("text")
-                assert isinstance(text, str)
-                message = json.loads(text)
-                if message["action"] == "auth":
-                    response: dict[str, object] = {"T": "success", "msg": "authenticated"}
-                    await _send_websocket_json(send, response)
-                else:
-                    response = {"T": "subscription", "news": ["*"]}
-                    await _send_websocket_json(send, response)
-                    await _send_websocket_json(
-                        send,
-                        {
-                            "T": "n",
-                            "symbols": [" AAPL "],
-                            "author": "Benzinga Newsdesk",
-                            "headline": "Apple &amp;amp; launches a phone",
-                            "summary": "Company announcement",
-                            "url": "https://example.test/news",
-                        },
-                    )
-                    connected.set()
-
-        async def discord_handler(request: httpx2.Request) -> httpx2.Response:
-            received_payloads.append(json.loads(request.content))
-            discord_delivered.set()
-            if shutdown_mode == "stop-event":
-                try:
-                    await release_delivery.wait()
-                except asyncio.CancelledError:
-                    delivery_cancelled.set()
-                    raise
-            return httpx2.Response(204)
+        alpaca_app = _ShutdownNewsASGIApp()
+        discord_handler = _ShutdownDiscordHandler(shutdown_mode)
 
         config = replace(
             _config(),
@@ -261,36 +484,29 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
                 application = asyncio.create_task(
                     run_application(config, client, _logger(StringIO()), stop_event, stock_starter=None)
                 )
-                await asyncio.wait_for(discord_delivered.wait(), timeout=2)
-                await asyncio.wait_for(connected.wait(), timeout=2)
+                await asyncio.wait_for(discord_handler.delivered.wait(), timeout=2)
+                await asyncio.wait_for(alpaca_app.connected.wait(), timeout=2)
                 if shutdown_mode == "cancel":
                     application.cancel()
                     with pytest.raises(asyncio.CancelledError):
                         await asyncio.wait_for(application, timeout=2)
                 else:
                     stop_event.set()
-                    await asyncio.wait_for(disconnected.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
                     assert not application.done()
-                    assert not delivery_cancelled.is_set()
-                    release_delivery.set()
+                    assert not discord_handler.delivery_cancelled.is_set()
+                    discord_handler.release_delivery.set()
                     await asyncio.wait_for(application, timeout=2)
-                await asyncio.wait_for(disconnected.wait(), timeout=2)
-                orphaned_tasks = {
-                    task
-                    for task in asyncio.all_tasks()
-                    if task not in existing_tasks and task is not asyncio.current_task()
-                }
+                await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
+                orphaned_tasks = _tasks_started_after(existing_tasks)
                 try:
                     assert not orphaned_tasks
                 finally:
-                    for task in orphaned_tasks:
-                        task.cancel()
-                    if orphaned_tasks:
-                        await asyncio.gather(*orphaned_tasks, return_exceptions=True)
+                    await _cancel_tasks_started_after(existing_tasks)
 
-        assert connected.is_set()
-        assert disconnected.is_set()
-        assert _payload_title(received_payloads[0]) == " AAPL : Apple &amp; launches a phone"
+        assert alpaca_app.connected.is_set()
+        assert alpaca_app.disconnected.is_set()
+        assert _payload_title(discord_handler.received_payloads[0]) == " AAPL : Apple &amp; launches a phone"
 
     asyncio.run(scenario())
 
@@ -300,65 +516,13 @@ def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth:
     """Verify news continues while the stock stream connects or fails auth."""
 
     async def scenario() -> None:
-        stock_auth_started = asyncio.Event()
-        release_stock_auth = asyncio.Event()
-        stock_subscribed = asyncio.Event()
-        news_subscribed = asyncio.Event()
-        news_disconnected = asyncio.Event()
-        stock_disconnected = asyncio.Event()
+        alpaca_app = _StockConnectASGIApp(reject_stock_auth)
         discord_delivered = asyncio.Event()
         stock_failure_logged = asyncio.Event()
         requests: list[dict[str, object]] = []
         logs = StringIO()
         logger = _logger(logs)
         logger.addHandler(_LogMessageEvent("failed to connect Alpaca stock stream", stock_failure_logged))
-
-        async def alpaca_app(
-            scope: MutableMapping[str, Any],
-            receive: ASGIReceive,
-            send: ASGISend,
-        ) -> None:
-            path = scope.get("path")
-            assert isinstance(path, str)
-            is_news = path.endswith("/news")
-            await receive()
-            await send({"type": "websocket.accept"})
-            while True:
-                incoming = await receive()
-                if incoming.get("type") == "websocket.disconnect":
-                    (news_disconnected if is_news else stock_disconnected).set()
-                    return
-                text = incoming.get("text")
-                assert isinstance(text, str)
-                request = json.loads(text)
-                if request["action"] == "auth":
-                    if not is_news:
-                        stock_auth_started.set()
-                        if reject_stock_auth:
-                            await _send_websocket_json(
-                                send,
-                                {"T": "error", "code": 401, "msg": "invalid private-api-key and private-secret"},
-                            )
-                            continue
-                        await release_stock_auth.wait()
-                    await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                    continue
-
-                if is_news:
-                    await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
-                    await _send_websocket_json(
-                        send,
-                        {
-                            "T": "n",
-                            "symbols": ["AAPL"],
-                            "author": "Benzinga Newsdesk",
-                            "headline": "Apple launches a phone",
-                        },
-                    )
-                    news_subscribed.set()
-                else:
-                    await _send_websocket_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
-                    stock_subscribed.set()
 
         async def discord_handler(request: httpx2.Request) -> httpx2.Response:
             requests.append(json.loads(request.content))
@@ -382,20 +546,20 @@ def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth:
                 async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
                     application = asyncio.create_task(run_application(config, client, logger, stop_event))
                     try:
-                        await asyncio.wait_for(stock_auth_started.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.stock_auth_started.wait(), timeout=2)
                         await asyncio.wait_for(discord_delivered.wait(), timeout=2)
-                        await asyncio.wait_for(news_subscribed.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.news_subscribed.wait(), timeout=2)
                         if reject_stock_auth:
                             await asyncio.wait_for(stock_failure_logged.wait(), timeout=2)
                         else:
-                            assert not stock_subscribed.is_set()
-                            release_stock_auth.set()
-                            await asyncio.wait_for(stock_subscribed.wait(), timeout=2)
+                            assert not alpaca_app.stock_subscribed.is_set()
+                            alpaca_app.release_stock_auth.set()
+                            await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
                         application.cancel()
                         with pytest.raises(asyncio.CancelledError):
                             await asyncio.wait_for(application, timeout=2)
-                        await asyncio.wait_for(news_disconnected.wait(), timeout=2)
-                        await asyncio.wait_for(stock_disconnected.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.news_disconnected.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.stock_disconnected.wait(), timeout=2)
                     finally:
                         if not application.done():
                             application.cancel()
@@ -407,7 +571,7 @@ def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth:
         if reject_stock_auth:
             assert "failed to connect Alpaca stock stream" in logs.getvalue()
         else:
-            assert stock_subscribed.is_set()
+            assert alpaca_app.stock_subscribed.is_set()
 
     asyncio.run(scenario())
 
@@ -421,55 +585,8 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
     """Verify terminal errors from established streams fail the application."""
 
     async def scenario() -> None:
-        subscribed_streams: set[str] = set()
-        both_subscribed = asyncio.Event()
-        report_terminal_error = asyncio.Event()
-        disconnected_streams: set[str] = set()
-        both_disconnected = asyncio.Event()
+        alpaca_app = _EstablishedStreamFailureASGIApp(failed_stream, terminal_timing)
         logs = StringIO()
-
-        async def alpaca_app(
-            scope: MutableMapping[str, Any],
-            receive: ASGIReceive,
-            send: ASGISend,
-        ) -> None:
-            path = scope.get("path")
-            assert isinstance(path, str)
-            stream_name = "news" if path.endswith("/news") else "stock"
-            channel = "news" if stream_name == "news" else "trades"
-            await receive()
-            await send({"type": "websocket.accept"})
-            while True:
-                incoming = await receive()
-                if incoming.get("type") == "websocket.disconnect":
-                    disconnected_streams.add(stream_name)
-                    if len(disconnected_streams) == 2:
-                        both_disconnected.set()
-                    return
-                text = incoming.get("text")
-                assert isinstance(text, str)
-                request = json.loads(text)
-                if request["action"] == "auth":
-                    await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                    continue
-                subscriptions = ["*"] if channel == "news" else ["SPY", "QQQ"]
-                subscription = {"T": "subscription", channel: subscriptions}
-                if stream_name == failed_stream and terminal_timing == "before-consumer":
-                    await _send_websocket_json(
-                        send,
-                        [subscription, {"T": "error", "code": 403, "msg": "request rejected using private-api-key"}],
-                    )
-                else:
-                    await _send_websocket_json(send, subscription)
-                subscribed_streams.add(stream_name)
-                if len(subscribed_streams) == 2:
-                    both_subscribed.set()
-                if stream_name == failed_stream and terminal_timing == "late":
-                    await report_terminal_error.wait()
-                    await _send_websocket_json(
-                        send,
-                        {"T": "error", "code": 403, "msg": "request rejected using private-api-key"},
-                    )
 
         async def unused_discord_handler(_request: httpx2.Request) -> httpx2.Response:
             raise AssertionError("terminal stream errors must not send Discord messages")
@@ -489,9 +606,9 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
                 async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
                     application = asyncio.create_task(run_application(config, client, _logger(logs), asyncio.Event()))
                     try:
-                        await asyncio.wait_for(both_subscribed.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.both_subscribed.wait(), timeout=2)
                         if terminal_timing == "late":
-                            report_terminal_error.set()
+                            alpaca_app.report_terminal_error.set()
                         runtime_name = "news" if failed_stream == "news" else "stock"
                         with pytest.raises(
                             RuntimeError,
@@ -499,14 +616,14 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
                         ) as terminal:
                             await asyncio.wait_for(application, timeout=2)
                         assert "private-api-key" not in str(terminal.value)
-                        await asyncio.wait_for(both_disconnected.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.both_disconnected.wait(), timeout=2)
                     finally:
                         if not application.done():
                             application.cancel()
                         await asyncio.gather(application, return_exceptions=True)
 
-        assert subscribed_streams == {"news", "stock"}
-        assert disconnected_streams == {"news", "stock"}
+        assert alpaca_app.subscribed_streams == _EXPECTED_ALPACA_STREAM_NAMES
+        assert alpaca_app.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES
 
     asyncio.run(scenario())
 
@@ -515,66 +632,12 @@ def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
     """Verify cancellation closes both adapters and cancels delivery."""
 
     async def scenario() -> None:
-        first_request_started = asyncio.Event()
-        release_request = asyncio.Event()
+        alpaca_app = _CancellationASGIApp()
+        discord_handler = _CancellationDiscordHandler()
         skipped_later_item = asyncio.Event()
-        all_disconnected = asyncio.Event()
-        sender_cancelled = asyncio.Event()
-        disconnected_streams: set[str] = set()
-        requested_titles: list[str] = []
         logs = StringIO()
         logger = _logger(logs)
         logger.addHandler(_LogMessageEvent("skipping news item", skipped_later_item))
-
-        async def alpaca_app(
-            scope: MutableMapping[str, Any],
-            receive: ASGIReceive,
-            send: ASGISend,
-        ) -> None:
-            path = scope.get("path")
-            assert isinstance(path, str)
-            stream_name = "news" if path.endswith("/news") else "stock"
-            await receive()
-            await send({"type": "websocket.accept"})
-            while True:
-                incoming = await receive()
-                if incoming.get("type") == "websocket.disconnect":
-                    disconnected_streams.add(stream_name)
-                    if len(disconnected_streams) == 2:
-                        all_disconnected.set()
-                    return
-                text = incoming.get("text")
-                assert isinstance(text, str)
-                request = json.loads(text)
-                if request["action"] == "auth":
-                    await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                    continue
-                if stream_name == "stock":
-                    await _send_websocket_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
-                    continue
-
-                await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
-                for headline, author in (
-                    ("Apple launches a phone", "Benzinga Newsdesk"),
-                    ("Microsoft launches a tablet", "Benzinga Newsdesk"),
-                    ("unrouted item", "Other Newsdesk"),
-                ):
-                    await _send_websocket_json(
-                        send,
-                        {"T": "n", "symbols": ["AAPL"], "author": author, "headline": headline},
-                    )
-
-        async def discord_handler(request: httpx2.Request) -> httpx2.Response:
-            title = _payload_title(json.loads(request.content))
-            if title == "AAPL: Apple launches a phone":
-                first_request_started.set()
-                try:
-                    await release_request.wait()
-                except asyncio.CancelledError:
-                    sender_cancelled.set()
-                    raise
-            requested_titles.append(title)
-            return httpx2.Response(204)
 
         config = replace(
             _config(),
@@ -594,38 +657,27 @@ def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
                     existing_tasks = asyncio.all_tasks()
                     application = asyncio.create_task(run_application(config, client, logger, stop_event))
                     try:
-                        await asyncio.wait_for(first_request_started.wait(), timeout=2)
+                        await asyncio.wait_for(discord_handler.first_request_started.wait(), timeout=2)
                         await asyncio.wait_for(skipped_later_item.wait(), timeout=2)
+                        await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
                         stop_event.set()
                         application.cancel()
-                        await asyncio.wait_for(all_disconnected.wait(), timeout=2)
-                        release_request.set()
+                        await asyncio.wait_for(alpaca_app.all_disconnected.wait(), timeout=2)
+                        discord_handler.release_request.set()
                         with pytest.raises(asyncio.CancelledError):
                             await asyncio.wait_for(application, timeout=2)
-                        leaked_tasks = {
-                            task
-                            for task in asyncio.all_tasks()
-                            if task not in existing_tasks and task is not asyncio.current_task()
-                        }
+                        leaked_tasks = _tasks_started_after(existing_tasks)
                         assert not leaked_tasks, f"unexpected tasks after cancellation: {leaked_tasks!r}"
                     finally:
-                        release_request.set()
+                        discord_handler.release_request.set()
                         if not application.done():
                             application.cancel()
                         await asyncio.gather(application, return_exceptions=True)
-                        leaked_tasks = {
-                            task
-                            for task in asyncio.all_tasks()
-                            if task not in existing_tasks and task is not asyncio.current_task()
-                        }
-                        for task in leaked_tasks:
-                            task.cancel()
-                        if leaked_tasks:
-                            await asyncio.gather(*leaked_tasks, return_exceptions=True)
+                        await _cancel_tasks_started_after(existing_tasks)
 
-        assert disconnected_streams == {"news", "stock"}
-        assert requested_titles == []
-        assert sender_cancelled.is_set()
+        assert alpaca_app.disconnected_streams == {"news", "stock"}
+        assert discord_handler.requested_titles == []
+        assert discord_handler.sender_cancelled.is_set()
 
     asyncio.run(scenario())
 
@@ -823,16 +875,18 @@ def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> No
     asyncio.run(scenario())
 
 
-def test_webhook_fanout_logs_failures_without_exposing_tokens() -> None:
-    """Verify webhook failures are logged without exposing webhook tokens."""
+def test_webhook_fanout_continues_after_failure() -> None:
+    """Verify a webhook failure does not prevent other queued deliveries."""
 
     async def scenario() -> None:
         output = StringIO()
+        expected_news_titles = {
+            "AAPL: Apple launches a phone",
+            "MSFT: Microsoft launches a tablet",
+        }
+        expected_news_item_count = len(expected_news_titles)
         failed_webhook = "https://discord.test/api/webhooks/fail/secret-fail"
         successful_webhook = "https://discord.test/api/webhooks/success/secret-success"
-        quoted_webhook = 'https://discord.test/api/webhooks/fail/secret"quoted'
-        nested_webhook = "https://discord.test/api/webhooks/nested/secret-nested"
-        tuple_webhook = "https://discord.test/api/webhooks/tuple/secret-tuple"
         config = replace(
             _config(),
             discord_news_webhooks=(failed_webhook, successful_webhook),
@@ -853,67 +907,75 @@ def test_webhook_fanout_logs_failures_without_exposing_tokens() -> None:
 
             return events()
 
-        with _captured_app_logs(output) as logger:
-            async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-                await run(config, client, logger, connect_news)
-            library_logger = logging.getLogger("httpx2")
-            assert library_logger.getEffectiveLevel() >= logging.WARNING
-            library_logger.info("HTTP Request: POST %s", failed_webhook)
-            library_logger.warning("HTTP transport warning for %s", failed_webhook)
-            library_logger.warning("HTTP transport warning for %s", quoted_webhook)
-            try:
-                raise RuntimeError(f"HTTP request failed for {quoted_webhook}")
-            except RuntimeError:
-                library_logger.exception("HTTP request exception")
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(config, client, _logger(output), connect_news)
 
-            class StringableWebhook:
-                def __str__(self) -> str:
-                    return nested_webhook
-
-            logger.warning(
-                "structured webhook metadata",
-                extra={
-                    "metadata": {
-                        "webhook": failed_webhook,
-                        "nested": [successful_webhook, (tuple_webhook,)],
-                        "stringable": StringableWebhook(),
-                    }
-                },
-            )
-
-        assert len(delivered) == 4
-        assert requested.count(failed_webhook) == 2
-        assert requested.count(successful_webhook) == 2
-        assert {_payload_title(payload) for payload in delivered} == {
-            "AAPL: Apple launches a phone",
-            "MSFT: Microsoft launches a tablet",
-        }
+        assert len(delivered) == expected_news_item_count * len(config.discord_news_webhooks)
+        assert requested.count(failed_webhook) == expected_news_item_count
+        assert requested.count(successful_webhook) == expected_news_item_count
+        assert {_payload_title(payload) for payload in delivered} == expected_news_titles
         log_output = output.getvalue()
         records = [json.loads(line) for line in log_output.splitlines()]
         failure_logs = [record for record in records if record["msg"] == "failed to send Discord webhook"]
-        assert len(failure_logs) == 2
+        assert len(failure_logs) == expected_news_item_count
         assert all(record["error"] == "post webhook: unexpected status 503" for record in failure_logs)
-        exception_log = next(record for record in records if record["msg"] == "HTTP request exception")
-        assert "[redacted webhook URL]" in exception_log["exception"]
-        structured_log = next(record for record in records if record["msg"] == "structured webhook metadata")
-        assert structured_log["metadata"] == {
-            "webhook": "[redacted webhook URL]",
-            "nested": ["[redacted webhook URL]", ["[redacted webhook URL]"]],
-            "stringable": "[redacted webhook URL]",
-        }
-        assert "[redacted webhook URL]" in log_output
-        assert "HTTP Request" not in log_output
         assert failed_webhook not in log_output
-        assert successful_webhook not in log_output
-        assert quoted_webhook not in log_output
-        assert nested_webhook not in log_output
-        assert tuple_webhook not in log_output
         assert "secret-fail" not in log_output
-        assert "secret-success" not in log_output
-        assert "secret-nested" not in log_output
-        assert "secret-tuple" not in log_output
 
     asyncio.run(scenario())
+
+
+def test_webhook_logs_redact_urls_from_library_and_structured_records() -> None:
+    """Verify webhook URLs are redacted in library and structured logs."""
+    output = StringIO()
+    failed_webhook = "https://discord.test/api/webhooks/fail/secret-fail"
+    successful_webhook = "https://discord.test/api/webhooks/success/secret-success"
+    quoted_webhook = 'https://discord.test/api/webhooks/fail/secret"quoted'
+    nested_webhook = "https://discord.test/api/webhooks/nested/secret-nested"
+    tuple_webhook = "https://discord.test/api/webhooks/tuple/secret-tuple"
+
+    with _captured_app_logs(output) as logger:
+        library_logger = logging.getLogger("httpx2")
+        assert library_logger.getEffectiveLevel() >= logging.WARNING
+        library_logger.info("HTTP Request: POST %s", failed_webhook)
+        library_logger.warning("HTTP transport warning for %s", failed_webhook)
+        library_logger.warning("HTTP transport warning for %s", quoted_webhook)
+        try:
+            raise RuntimeError(f"HTTP request failed for {quoted_webhook}")
+        except RuntimeError:
+            library_logger.exception("HTTP request exception")
+        logger.warning(
+            "structured webhook metadata",
+            extra={
+                "metadata": {
+                    "webhook": failed_webhook,
+                    "nested": [successful_webhook, (tuple_webhook,)],
+                    "stringable": _StringableWebhook(),
+                }
+            },
+        )
+
+    log_output = output.getvalue()
+    records = [json.loads(line) for line in log_output.splitlines()]
+    exception_log = next(record for record in records if record["msg"] == "HTTP request exception")
+    assert "[redacted webhook URL]" in exception_log["exception"]
+    structured_log = next(record for record in records if record["msg"] == "structured webhook metadata")
+    assert structured_log["metadata"] == {
+        "webhook": "[redacted webhook URL]",
+        "nested": ["[redacted webhook URL]", ["[redacted webhook URL]"]],
+        "stringable": "[redacted webhook URL]",
+    }
+    assert "[redacted webhook URL]" in log_output
+    assert "HTTP Request" not in log_output
+    assert failed_webhook not in log_output
+    assert successful_webhook not in log_output
+    assert quoted_webhook not in log_output
+    assert nested_webhook not in log_output
+    assert tuple_webhook not in log_output
+    assert "secret-fail" not in log_output
+    assert "secret-success" not in log_output
+    assert "secret-nested" not in log_output
+    assert "secret-tuple" not in log_output
 
 
 def test_normal_stream_completion_drains_queued_discord_deliveries() -> None:
@@ -959,6 +1021,7 @@ def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
     """Verify stock EOF logs its trade and drains queued news delivery."""
 
     async def scenario() -> None:
+        expected_spy_trade_price = 500.25
         request_started = asyncio.Event()
         release_request = asyncio.Event()
         news_iterator_closed = asyncio.Event()
@@ -998,7 +1061,7 @@ def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
                         raise StopAsyncIteration
                     await request_started.wait()
                     self._yielded = True
-                    return Trade(symbol="SPY", price=500.25, size=100)
+                    return Trade(symbol="SPY", price=expected_spy_trade_price, size=100)
 
             return StockStream()
 
@@ -1018,7 +1081,7 @@ def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
 
         trade_log = next(json.loads(line) for line in output.getvalue().splitlines() if '"msg":"stock trade"' in line)
         assert trade_log["symbol"] == "SPY"
-        assert trade_log["price"] == 500.25
+        assert trade_log["price"] == expected_spy_trade_price
         assert _payload_title(delivered[0]) == "AAPL: Apple launches a phone"
 
     asyncio.run(scenario())
@@ -1302,81 +1365,36 @@ def test_repeated_cancellation_cancels_delivery_worker() -> None:
     """Verify repeated cancellation stops the delivery worker and pending tasks."""
 
     async def scenario() -> None:
-        first_request_started = asyncio.Event()
-        second_delivery_queued = asyncio.Event()
-        stream_cancelled = asyncio.Event()
-        sender_cancelled = asyncio.Event()
-        release_request = asyncio.Event()
-        delivered: list[str] = []
-
-        async def handler(request: httpx2.Request) -> httpx2.Response:
-            title = _payload_title(json.loads(request.content))
-            first_request_started.set()
-            try:
-                await release_request.wait()
-            except asyncio.CancelledError:
-                sender_cancelled.set()
-                raise
-            delivered.append(title)
-            return httpx2.Response(204)
+        handler = _RepeatedCancellationDiscordHandler()
+        news_stream = _RepeatedCancellationNewsStream(handler.first_request_started)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncIterable[NewsItem]:
-                try:
-                    yield NewsItem(
-                        symbols=("AAPL",),
-                        author="Benzinga Newsdesk",
-                        headline="Apple launches a phone",
-                    )
-                    await first_request_started.wait()
-                    yield NewsItem(
-                        symbols=("MSFT",),
-                        author="Benzinga Newsdesk",
-                        headline="Microsoft launches a tablet",
-                    )
-                    second_delivery_queued.set()
-                    await asyncio.Event().wait()
-                finally:
-                    stream_cancelled.set()
-
-            return events()
+            return news_stream
 
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
             try:
-                await asyncio.wait_for(first_request_started.wait(), timeout=1)
-                await asyncio.wait_for(second_delivery_queued.wait(), timeout=1)
+                await asyncio.wait_for(handler.first_request_started.wait(), timeout=1)
+                await asyncio.wait_for(news_stream.second_delivery_queued.wait(), timeout=1)
                 runtime.cancel()
-                await asyncio.wait_for(stream_cancelled.wait(), timeout=1)
+                await asyncio.wait_for(news_stream.stream_cancelled.wait(), timeout=1)
                 if not runtime.done():
                     runtime.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await asyncio.wait_for(runtime, timeout=1)
-                assert delivered == []
-                pending_tasks = {
-                    task
-                    for task in asyncio.all_tasks()
-                    if task not in existing_tasks and task is not asyncio.current_task()
-                }
+                assert handler.delivered == []
+                pending_tasks = _tasks_started_after(existing_tasks)
                 assert not pending_tasks, f"pending tasks after cancellation: {pending_tasks!r}"
-                assert sender_cancelled.is_set()
+                assert handler.sender_cancelled.is_set()
             finally:
-                release_request.set()
+                handler.release_request.set()
                 if not runtime.done():
                     runtime.cancel()
                 await asyncio.gather(runtime, return_exceptions=True)
-                leaked_tasks = {
-                    task
-                    for task in asyncio.all_tasks()
-                    if task not in existing_tasks and task is not asyncio.current_task()
-                }
-                for task in leaked_tasks:
-                    task.cancel()
-                if leaked_tasks:
-                    await asyncio.gather(*leaked_tasks, return_exceptions=True)
+                await _cancel_tasks_started_after(existing_tasks)
 
-        assert sender_cancelled.is_set()
+        assert handler.sender_cancelled.is_set()
 
     asyncio.run(scenario())
 
