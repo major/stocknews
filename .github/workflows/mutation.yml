@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   mutation:
-    name: Earnings mutation pilot
+    name: Earnings and analyst mutation pilot
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

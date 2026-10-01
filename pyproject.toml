@@ -76,12 +76,7 @@ show_contexts = true
 
 [tool.mutmut]
 source_paths = ["src/stocknews"]
-only_mutate = ["src/stocknews/earnings.py"]
-pytest_add_cli_args_test_selection = [
-    "tests/test_earnings.py",
-    "tests/test_news.py",
-    "tests/test_domain_properties.py",
-]
+only_mutate = ["src/stocknews/earnings.py", "src/stocknews/analyst.py"]
 
 [tool.uv]
 default-groups = ["dev"]

@@ -68,11 +68,10 @@ podman build --build-arg GIT_SHA="$(git rev-parse HEAD)" -t stocknews .
 
 The non-gating GitHub Actions mutation pilot runs on Sundays at 05:17 UTC on the
 default branch and can also be started manually. The schedule becomes active
-after this workflow is merged to the default branch. It uses the existing
-`mutmut` pilot scope for `src/stocknews/earnings.py` with
-`tests/test_earnings.py`, `tests/test_news.py`, and
-`tests/test_domain_properties.py`. It uses two workers and a 15-minute job
-limit. Result logs and statistics are available as a 14-day artifact.
+after this workflow is merged to the default branch. It mutates
+`src/stocknews/earnings.py` and `src/stocknews/analyst.py` against the full test
+suite. It uses two workers and a 15-minute job limit. Result logs and statistics
+are available as a 14-day artifact.
 
 Surviving mutants are informational and have no score threshold. Setup,
 baseline, or mutation-command failures still fail the workflow. It does not run
