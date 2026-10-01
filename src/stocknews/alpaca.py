@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 import anyio
 import httpcore2
@@ -42,11 +42,9 @@ UINT32_MAX = 2**32 - 1
 WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
 HTTP_SERVER_ERROR_STATUS_CODE = 500
 
-EventT = TypeVar("EventT")
-
 
 @dataclass(frozen=True, slots=True)
-class _StreamConfig(Generic[EventT]):
+class _StreamConfig[EventT]:
     client: httpx2.AsyncClient
     url: str
     api_key: str
@@ -62,7 +60,7 @@ class AlpacaStreamError(RuntimeError):
 
 
 @dataclass(slots=True)
-class StreamHandle(Generic[EventT]):
+class StreamHandle[EventT]:
     """An active stream's bounded event queue and background task."""
 
     events: asyncio.Queue[EventT]
@@ -143,7 +141,7 @@ async def start_trade_stream(
     )
 
 
-async def _start_stream(
+async def _start_stream[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     on_terminated: Callable[[AlpacaStreamError], None] | None,
@@ -169,7 +167,7 @@ async def _start_stream(
     return StreamHandle(events=events, task=task)
 
 
-async def _manage_stream(
+async def _manage_stream[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
@@ -205,7 +203,7 @@ async def _manage_stream(
         await asyncio.gather(stop_task, return_exceptions=True)
 
 
-async def _run_stream(
+async def _run_stream[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
@@ -254,7 +252,7 @@ async def _run_stream(
         started.set_exception(AlpacaStreamError(f"Alpaca {config.stream_name} stream stopped before subscription"))
 
 
-async def _read_connection(
+async def _read_connection[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
@@ -284,7 +282,7 @@ async def _read_connection(
         return _failure_outcome(config, "connection", error, started.done())
 
 
-async def _authenticate_and_subscribe(
+async def _authenticate_and_subscribe[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
@@ -300,7 +298,7 @@ async def _authenticate_and_subscribe(
     return pending_messages
 
 
-async def _wait_for_ack(
+async def _wait_for_ack[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
@@ -338,7 +336,7 @@ async def _wait_for_ack(
     return None
 
 
-async def _read_events(
+async def _read_events[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
@@ -363,7 +361,7 @@ async def _read_events(
                 await events.put(event)
 
 
-def _failure_outcome(
+def _failure_outcome[EventT](
     config: _StreamConfig[EventT],
     stage: str,
     error: Exception,
