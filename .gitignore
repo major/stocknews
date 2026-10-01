@@ -1,7 +1,17 @@
 .env
 .vscode/
 .idea/
-coverage.out
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+*.egg-info/
 
 # deepwork scratch state (not part of repo)
 .slim/deepwork/
