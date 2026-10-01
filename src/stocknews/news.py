@@ -22,7 +22,6 @@ NewsClassification = Literal[
 
 def classify_news(item: NewsItem, blocked_phrases: Sequence[str]) -> NewsClassification:
     """Return a category or first skip reason, matching the original filter order."""
-
     headline = unescape(item.headline)
     if has_blocked_phrases(headline, blocked_phrases):
         return "blocked_phrase"

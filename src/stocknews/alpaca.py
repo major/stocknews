@@ -386,7 +386,7 @@ def _message_objects(payload: object) -> list[dict[str, object]]:
     for value in values:
         if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
             raise AlpacaStreamError("Alpaca stream sent a message with an invalid shape")
-        messages.append(cast(dict[str, object], value))
+        messages.append(cast("dict[str, object]", value))
     return messages
 
 

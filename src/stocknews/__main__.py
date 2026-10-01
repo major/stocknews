@@ -54,11 +54,11 @@ async def _stream_events[T](
         event = asyncio.create_task(handle.events.get())
         try:
             waiting: set[asyncio.Future[object]] = {
-                cast(asyncio.Future[object], event),
-                cast(asyncio.Future[object], terminated),
+                cast("asyncio.Future[object]", event),
+                cast("asyncio.Future[object]", terminated),
             }
             if not handle.task.done():
-                waiting.add(cast(asyncio.Future[object], handle.task))
+                waiting.add(cast("asyncio.Future[object]", handle.task))
             completed, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
 
             if terminated in completed:

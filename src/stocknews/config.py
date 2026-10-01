@@ -13,13 +13,11 @@ _DEFAULT_BLOCKED_PHRASES = "if you invested,you would have,would be worth"
 
 def csv_values(value: str) -> tuple[str, ...]:
     """Split comma-separated values, trimming whitespace and dropping empties."""
-
     return tuple(part for raw_part in value.split(",") if (part := raw_part.strip()))
 
 
 def load_config(environ: Mapping[str, str]) -> Config:
     """Load settings from ``environ`` while preserving explicitly empty values."""
-
     api_key = _required_env(environ, "ALPACA_API_KEY")
     api_secret = _required_env(environ, "ALPACA_API_SECRET")
     return Config(

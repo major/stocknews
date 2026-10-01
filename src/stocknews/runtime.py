@@ -140,7 +140,7 @@ async def _settle_task(
 async def _close_iterator[T](stream: AsyncIterator[T]) -> None:
     close = getattr(stream, "aclose", None)
     if callable(close):
-        await cast(Awaitable[None], close())
+        await cast("Awaitable[None]", close())
 
 
 async def run(
@@ -194,11 +194,11 @@ async def run(
 
         while True:
             assert news_read is not None
-            waiting: set[asyncio.Task[object]] = {cast(asyncio.Task[object], news_read)}
+            waiting: set[asyncio.Task[object]] = {cast("asyncio.Task[object]", news_read)}
             if stock_read is not None:
-                waiting.add(cast(asyncio.Task[object], stock_read))
+                waiting.add(cast("asyncio.Task[object]", stock_read))
             if stock_connection is not None:
-                waiting.add(cast(asyncio.Task[object], stock_connection))
+                waiting.add(cast("asyncio.Task[object]", stock_connection))
             completed, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
 
             if stock_connection is not None and stock_connection in completed:
@@ -260,11 +260,11 @@ async def run(
         interrupted_during_cleanup = False
         if worker is not None and not normal_completion:
             cancel_worker()
-            interrupted, _ = await _settle_task(cast(asyncio.Task[object], worker))
+            interrupted, _ = await _settle_task(cast("asyncio.Task[object]", worker))
             interrupted_during_cleanup |= interrupted
 
         pending_tasks = [
-            (stream_name, cast(asyncio.Task[object], task))
+            (stream_name, cast("asyncio.Task[object]", task))
             for stream_name, task in (("news", news_read), ("stock", stock_read), ("stock", stock_connection))
             if task is not None
         ]
@@ -289,7 +289,7 @@ async def run(
         ]
         for stream_name, task in iterator_close_tasks:
             interrupted, close_error = await _settle_task(
-                cast(asyncio.Task[object], task),
+                cast("asyncio.Task[object]", task),
                 on_interruption=cancel_worker,
             )
             interrupted_during_cleanup |= interrupted
@@ -307,11 +307,11 @@ async def run(
                     await asyncio.shield(worker)
                 except asyncio.CancelledError:
                     cancel_worker()
-                    await _settle_task(cast(asyncio.Task[object], worker))
+                    await _settle_task(cast("asyncio.Task[object]", worker))
                     raise
             else:
                 cancel_worker()
-                interrupted, _ = await _settle_task(cast(asyncio.Task[object], worker))
+                interrupted, _ = await _settle_task(cast("asyncio.Task[object]", worker))
                 interrupted_during_cleanup |= interrupted
         if interrupted_during_cleanup:
             raise asyncio.CancelledError

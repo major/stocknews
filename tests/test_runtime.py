@@ -754,14 +754,14 @@ def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> No
         second_news_yielded = asyncio.Event()
         release_second_news = asyncio.Event()
         news_iterator_closed = asyncio.Event()
-        news_iterators: list[AsyncGenerator[NewsItem, None]] = []
+        news_iterators: list[AsyncGenerator[NewsItem]] = []
 
         async def handler(_request: httpx2.Request) -> httpx2.Response:
             first_delivery_started.set()
             return httpx2.Response(204)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncGenerator[NewsItem, None]:
+            async def events() -> AsyncGenerator[NewsItem]:
                 try:
                     yield NewsItem(
                         symbols=("AAPL",),
