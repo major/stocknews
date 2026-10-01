@@ -1,50 +1,33 @@
-GOFMT := go run mvdan.cc/gofumpt
-GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-COVERAGE_PROFILE := coverage.out
-COVERAGE_THRESHOLD := 95
-APP_PACKAGES := ./cmd/stocknews ./internal/...
-TEST_PACKAGES := $(APP_PACKAGES) ./tools/coveragecheck
-COVERAGE_PACKAGES := $(TEST_PACKAGES)
+.PHONY: all check fmt fmt-fix lint types test build coverage audit clean
 
-.DEFAULT_GOAL := all
+all: fmt lint types coverage build
 
-.PHONY: all check fmt fmt-fix lint test doc build coverage audit clean
-
-all: fmt lint test doc build
-
-check: all coverage
+check: all
 
 fmt:
-	@tmp="$$(mktemp)"; trap 'rm -f "$$tmp"' EXIT; \
-	$(GOFMT) -l . >"$$tmp"; \
-	if [ -s "$$tmp" ]; then \
-		printf 'gofumpt found unformatted files:\n'; \
-		cat "$$tmp"; \
-		exit 1; \
-	fi
+	uv run --locked ruff format --check .
 
 fmt-fix:
-	$(GOFMT) -w .
+	uv run --locked ruff format .
 
 lint:
-	$(GOLANGCI_LINT) run ./...
+	uv run --locked ruff check .
+
+types:
+	uv run --locked mypy src/stocknews
+	uv run --locked pyright
 
 test:
-	go test $(TEST_PACKAGES)
-
-doc:
-	go vet ./...
+	uv run --locked pytest
 
 build:
-	go build ./cmd/stocknews
+	uv build
 
 coverage:
-	@coverpkg="$$(go list $(COVERAGE_PACKAGES) | paste -sd, -)"; \
-	go test -covermode=count -coverpkg="$$coverpkg" -coverprofile=$(COVERAGE_PROFILE) $(TEST_PACKAGES)
-	go run ./tools/coveragecheck -profile $(COVERAGE_PROFILE) -min $(COVERAGE_THRESHOLD)
+	uv run --locked pytest --cov=stocknews --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml --cov-fail-under=95
 
 audit:
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	uv run --locked pip-audit
 
 clean:
-	rm -f $(COVERAGE_PROFILE)
+	rm -rf .coverage coverage.xml htmlcov dist

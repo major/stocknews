@@ -5,15 +5,15 @@ on:
     branches:
       - main
     paths:
-      - "**/go.mod"
-      - "**/go.sum"
-      - "**/*.go"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
       - ".github/workflows/audit.yml"
   pull_request:
     paths:
-      - "**/go.mod"
-      - "**/go.sum"
-      - "**/*.go"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
       - ".github/workflows/audit.yml"
   schedule:
     - cron: "0 6 * * *"
@@ -32,11 +32,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Install uv and sync locked environment
+        run: |
+          python3 -m pip install --user --disable-pip-version-check "uv==0.12.18"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+          export PATH="$(python3 -m site --user-base)/bin:$PATH"
+          uv python install
+          uv sync --locked
 
-      - name: Run govulncheck
+      - name: Audit dependencies
         run: make audit

@@ -1,12 +1,23 @@
-FROM registry.access.redhat.com/hi/go:1.27-builder@sha256:ed97ed1cd597207baec4a3c9f8caecc7e77be3a19ee1426beece09656821a8f3 AS builder
-ARG GIT_SHA=unknown
-ARG BUILD_DATE=unknown
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.commit=${GIT_SHA} -X main.buildDate=${BUILD_DATE}" -o /tmp/stocknews ./cmd/stocknews
+FROM registry.access.redhat.com/ubi9/python-314:latest@sha256:28f564643c2fe7d4607562f1f4057f162654316f9226530a34925a792edf2263 AS builder
 
-FROM registry.access.redhat.com/hi/static:latest@sha256:20f419d12511f96524d9b9bb092ef5066d6bacee7ed45d7c528bef62f6d48f74
-COPY --from=builder /tmp/stocknews /usr/local/bin/stocknews
-CMD ["/usr/local/bin/stocknews"]
+WORKDIR /opt/app-root/src
+
+COPY pyproject.toml uv.lock .python-version ./
+COPY src ./src
+
+RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
+    && uv sync --locked --no-dev --no-editable --python python3.14
+
+FROM registry.access.redhat.com/ubi9/python-314:latest@sha256:28f564643c2fe7d4607562f1f4057f162654316f9226530a34925a792edf2263
+
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
+WORKDIR /opt/app-root/src
+
+COPY --from=builder --chown=1001:0 /opt/app-root/src/.venv /opt/app-root/src/.venv
+
+ENV PATH="/opt/app-root/src/.venv/bin:${PATH}"
+
+USER 1001:0
+ENTRYPOINT ["/opt/app-root/src/.venv/bin/stocknews"]
