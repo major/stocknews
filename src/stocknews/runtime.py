@@ -100,22 +100,31 @@ async def _deliver(
             jobs.task_done()
 
 
-async def _settle_task(task: asyncio.Task[object]) -> bool:
+async def _settle_task(
+    task: asyncio.Task[object],
+    *,
+    on_interruption: Callable[[], None] | None = None,
+) -> tuple[bool, Exception | None]:
     interrupted = False
     while not task.done():
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             current = asyncio.current_task()
-            interrupted = interrupted or (current is not None and current.cancelling() > 0)
+            cancelled = current is not None and current.cancelling() > 0
+            interrupted = interrupted or cancelled
+            if cancelled and on_interruption is not None:
+                on_interruption()
             continue
         except Exception:
             break
     try:
         task.result()
+    except Exception as task_error:
+        return interrupted, task_error
     except BaseException:
         pass
-    return interrupted
+    return interrupted, None
 
 
 async def _close_iterator[T](stream: AsyncIterator[T]) -> None:
@@ -145,6 +154,13 @@ async def run(
     news_read: asyncio.Task[NewsItem | _StreamEnded] | None = None
     stock_read: asyncio.Task[Trade | _StreamEnded] | None = None
     normal_completion = False
+    worker_cancelled = False
+
+    def cancel_worker() -> None:
+        nonlocal worker_cancelled
+        if worker is not None and not worker_cancelled:
+            worker.cancel()
+            worker_cancelled = True
 
     if stock_stream is not None:
         stock_factory = stock_stream
@@ -232,11 +248,10 @@ async def run(
         raise
     finally:
         interrupted_during_cleanup = False
-        worker_cancelled = False
         if worker is not None and not normal_completion:
-            worker.cancel()
-            worker_cancelled = True
-            interrupted_during_cleanup |= await _settle_task(cast(asyncio.Task[object], worker))
+            cancel_worker()
+            interrupted, _ = await _settle_task(cast(asyncio.Task[object], worker))
+            interrupted_during_cleanup |= interrupted
 
         pending_tasks = [
             cast(asyncio.Task[object], task) for task in (news_read, stock_read, stock_connection) if task is not None
@@ -245,15 +260,26 @@ async def run(
             if not task.done():
                 task.cancel()
         for task in pending_tasks:
-            interrupted_during_cleanup |= await _settle_task(task)
+            interrupted, _ = await _settle_task(task, on_interruption=cancel_worker)
+            interrupted_during_cleanup |= interrupted
 
         iterator_close_tasks = [
-            asyncio.create_task(_close_iterator(iterator))
-            for iterator in (news_iterator, stock_iterator)
+            (stream_name, asyncio.create_task(_close_iterator(iterator)))
+            for stream_name, iterator in (("news", news_iterator), ("stock", stock_iterator))
             if iterator is not None
         ]
-        for task in iterator_close_tasks:
-            interrupted_during_cleanup |= await _settle_task(cast(asyncio.Task[object], task))
+        for stream_name, task in iterator_close_tasks:
+            interrupted, close_error = await _settle_task(
+                cast(asyncio.Task[object], task),
+                on_interruption=cancel_worker,
+            )
+            interrupted_during_cleanup |= interrupted
+            if close_error is not None:
+                logger.warning(
+                    "failed to close Alpaca %s stream",
+                    stream_name,
+                    extra={"error": type(close_error).__name__, "stream": stream_name},
+                )
 
         if worker is not None:
             if normal_completion and not interrupted_during_cleanup:
@@ -261,15 +287,12 @@ async def run(
                     await jobs.put(None)
                     await asyncio.shield(worker)
                 except asyncio.CancelledError:
-                    if not worker_cancelled:
-                        worker.cancel()
-                        worker_cancelled = True
+                    cancel_worker()
                     await _settle_task(cast(asyncio.Task[object], worker))
                     raise
             else:
-                if not worker_cancelled:
-                    worker.cancel()
-                    worker_cancelled = True
-                interrupted_during_cleanup |= await _settle_task(cast(asyncio.Task[object], worker))
+                cancel_worker()
+                interrupted, _ = await _settle_task(cast(asyncio.Task[object], worker))
+                interrupted_during_cleanup |= interrupted
         if interrupted_during_cleanup:
             raise asyncio.CancelledError
