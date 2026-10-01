@@ -539,34 +539,36 @@ def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth:
             discord_news_webhooks=("https://discord.test/api/webhooks/news/token",),
         )
         stop_event = asyncio.Event()
-        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
-            async with ASGIWebSocketTransport(alpaca_app) as stock_transport:
-                routes = {
-                    "news.alpaca.test": news_transport,
-                    "stocks.alpaca.test": stock_transport,
-                    "discord.test": httpx2.MockTransport(discord_handler),
-                }
-                async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
-                    application = asyncio.create_task(run_application(config, client, logger, stop_event))
-                    try:
-                        await asyncio.wait_for(alpaca_app.stock_auth_started.wait(), timeout=2)
-                        await asyncio.wait_for(discord_delivered.wait(), timeout=2)
-                        await asyncio.wait_for(alpaca_app.news_subscribed.wait(), timeout=2)
-                        if reject_stock_auth:
-                            await asyncio.wait_for(stock_failure_logged.wait(), timeout=2)
-                        else:
-                            assert not alpaca_app.stock_subscribed.is_set()
-                            alpaca_app.release_stock_auth.set()
-                            await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
+        async with (
+            ASGIWebSocketTransport(alpaca_app) as news_transport,
+            ASGIWebSocketTransport(alpaca_app) as stock_transport,
+        ):
+            routes = {
+                "news.alpaca.test": news_transport,
+                "stocks.alpaca.test": stock_transport,
+                "discord.test": httpx2.MockTransport(discord_handler),
+            }
+            async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
+                application = asyncio.create_task(run_application(config, client, logger, stop_event))
+                try:
+                    await asyncio.wait_for(alpaca_app.stock_auth_started.wait(), timeout=2)
+                    await asyncio.wait_for(discord_delivered.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.news_subscribed.wait(), timeout=2)
+                    if reject_stock_auth:
+                        await asyncio.wait_for(stock_failure_logged.wait(), timeout=2)
+                    else:
+                        assert not alpaca_app.stock_subscribed.is_set()
+                        alpaca_app.release_stock_auth.set()
+                        await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
+                    application.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(application, timeout=2)
+                    await asyncio.wait_for(alpaca_app.news_disconnected.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.stock_disconnected.wait(), timeout=2)
+                finally:
+                    if not application.done():
                         application.cancel()
-                        with pytest.raises(asyncio.CancelledError):
-                            await asyncio.wait_for(application, timeout=2)
-                        await asyncio.wait_for(alpaca_app.news_disconnected.wait(), timeout=2)
-                        await asyncio.wait_for(alpaca_app.stock_disconnected.wait(), timeout=2)
-                    finally:
-                        if not application.done():
-                            application.cancel()
-                        await asyncio.gather(application, return_exceptions=True)
+                    await asyncio.gather(application, return_exceptions=True)
 
         assert len(requests) == 1
         assert "private-api-key" not in logs.getvalue()
@@ -600,31 +602,33 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
             alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
             alpaca_stock_stream_url="ws://stocks.alpaca.test/v2",
         )
-        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
-            async with ASGIWebSocketTransport(alpaca_app) as stock_transport:
-                routes = {
-                    "news.alpaca.test": news_transport,
-                    "stocks.alpaca.test": stock_transport,
-                    "discord.test": httpx2.MockTransport(unused_discord_handler),
-                }
-                async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
-                    application = asyncio.create_task(run_application(config, client, _logger(logs), asyncio.Event()))
-                    try:
-                        await asyncio.wait_for(alpaca_app.both_subscribed.wait(), timeout=2)
-                        if terminal_timing == "late":
-                            alpaca_app.report_terminal_error.set()
-                        runtime_name = "news" if failed_stream == "news" else "stock"
-                        with pytest.raises(
-                            RuntimeError,
-                            match=f"alpaca {runtime_name} stream terminated",
-                        ) as terminal:
-                            await asyncio.wait_for(application, timeout=2)
-                        assert "private-api-key" not in str(terminal.value)
-                        await asyncio.wait_for(alpaca_app.both_disconnected.wait(), timeout=2)
-                    finally:
-                        if not application.done():
-                            application.cancel()
-                        await asyncio.gather(application, return_exceptions=True)
+        async with (
+            ASGIWebSocketTransport(alpaca_app) as news_transport,
+            ASGIWebSocketTransport(alpaca_app) as stock_transport,
+        ):
+            routes = {
+                "news.alpaca.test": news_transport,
+                "stocks.alpaca.test": stock_transport,
+                "discord.test": httpx2.MockTransport(unused_discord_handler),
+            }
+            async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
+                application = asyncio.create_task(run_application(config, client, _logger(logs), asyncio.Event()))
+                try:
+                    await asyncio.wait_for(alpaca_app.both_subscribed.wait(), timeout=2)
+                    if terminal_timing == "late":
+                        alpaca_app.report_terminal_error.set()
+                    runtime_name = "news" if failed_stream == "news" else "stock"
+                    with pytest.raises(
+                        RuntimeError,
+                        match=f"alpaca {runtime_name} stream terminated",
+                    ) as terminal:
+                        await asyncio.wait_for(application, timeout=2)
+                    assert "private-api-key" not in str(terminal.value)
+                    await asyncio.wait_for(alpaca_app.both_disconnected.wait(), timeout=2)
+                finally:
+                    if not application.done():
+                        application.cancel()
+                    await asyncio.gather(application, return_exceptions=True)
 
         assert alpaca_app.subscribed_streams == _EXPECTED_ALPACA_STREAM_NAMES
         assert alpaca_app.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES
@@ -650,34 +654,36 @@ def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
             discord_news_webhooks=("https://discord.test/api/webhooks/news/private-token",),
         )
         stop_event = asyncio.Event()
-        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
-            async with ASGIWebSocketTransport(alpaca_app) as stock_transport:
-                routes = {
-                    "news.alpaca.test": news_transport,
-                    "stocks.alpaca.test": stock_transport,
-                    "discord.test": httpx2.MockTransport(discord_handler),
-                }
-                async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
-                    existing_tasks = asyncio.all_tasks()
-                    application = asyncio.create_task(run_application(config, client, logger, stop_event))
-                    try:
-                        await asyncio.wait_for(discord_handler.first_request_started.wait(), timeout=2)
-                        await asyncio.wait_for(skipped_later_item.wait(), timeout=2)
-                        await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
-                        stop_event.set()
+        async with (
+            ASGIWebSocketTransport(alpaca_app) as news_transport,
+            ASGIWebSocketTransport(alpaca_app) as stock_transport,
+        ):
+            routes = {
+                "news.alpaca.test": news_transport,
+                "stocks.alpaca.test": stock_transport,
+                "discord.test": httpx2.MockTransport(discord_handler),
+            }
+            async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
+                existing_tasks = asyncio.all_tasks()
+                application = asyncio.create_task(run_application(config, client, logger, stop_event))
+                try:
+                    await asyncio.wait_for(discord_handler.first_request_started.wait(), timeout=2)
+                    await asyncio.wait_for(skipped_later_item.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
+                    stop_event.set()
+                    application.cancel()
+                    await asyncio.wait_for(alpaca_app.all_disconnected.wait(), timeout=2)
+                    discord_handler.release_request.set()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(application, timeout=2)
+                    leaked_tasks = _tasks_started_after(existing_tasks)
+                    assert not leaked_tasks, f"unexpected tasks after cancellation: {leaked_tasks!r}"
+                finally:
+                    discord_handler.release_request.set()
+                    if not application.done():
                         application.cancel()
-                        await asyncio.wait_for(alpaca_app.all_disconnected.wait(), timeout=2)
-                        discord_handler.release_request.set()
-                        with pytest.raises(asyncio.CancelledError):
-                            await asyncio.wait_for(application, timeout=2)
-                        leaked_tasks = _tasks_started_after(existing_tasks)
-                        assert not leaked_tasks, f"unexpected tasks after cancellation: {leaked_tasks!r}"
-                    finally:
-                        discord_handler.release_request.set()
-                        if not application.done():
-                            application.cancel()
-                        await asyncio.gather(application, return_exceptions=True)
-                        await _cancel_tasks_started_after(existing_tasks)
+                    await asyncio.gather(application, return_exceptions=True)
+                    await _cancel_tasks_started_after(existing_tasks)
 
         assert alpaca_app.disconnected_streams == {"news", "stock"}
         assert discord_handler.requested_titles == []

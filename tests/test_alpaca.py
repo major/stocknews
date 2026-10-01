@@ -312,27 +312,26 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
             async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
                 raise failure
 
-        async with FailingTransport(unreachable_app) as transport:
-            async with httpx2.AsyncClient(transport=transport) as client:
-                # Include tasks that belong to the already-open transport and client.
-                # Any pending task created by the Alpaca startup attempt is owned by it.
-                tasks_before_startup = asyncio.all_tasks()
-                with pytest.raises(alpaca.AlpacaStreamError, match="initial connection failed") as error:
-                    await alpaca.start_news_stream(
-                        client,
-                        settings=AlpacaSettings(
-                            api_key=REDACTION_TEST_API_KEY,
-                            api_secret=REDACTION_TEST_API_CREDENTIAL,
-                            news_stream_url="ws://alpaca.test/v1beta1/news",
-                            stock_stream_url="ws://unused.test/v2",
-                        ),
-                        stop_event=asyncio.Event(),
-                    )
-                new_pending_tasks = asyncio.all_tasks() - tasks_before_startup
-                current_task = asyncio.current_task()
-                if current_task is not None:
-                    new_pending_tasks.discard(current_task)
-                assert not new_pending_tasks, f"pending tasks after connection failure: {new_pending_tasks!r}"
+        async with FailingTransport(unreachable_app) as transport, httpx2.AsyncClient(transport=transport) as client:
+            # Include tasks that belong to the already-open transport and client.
+            # Any pending task created by the Alpaca startup attempt is owned by it.
+            tasks_before_startup = asyncio.all_tasks()
+            with pytest.raises(alpaca.AlpacaStreamError, match="initial connection failed") as error:
+                await alpaca.start_news_stream(
+                    client,
+                    settings=AlpacaSettings(
+                        api_key=REDACTION_TEST_API_KEY,
+                        api_secret=REDACTION_TEST_API_CREDENTIAL,
+                        news_stream_url="ws://alpaca.test/v1beta1/news",
+                        stock_stream_url="ws://unused.test/v2",
+                    ),
+                    stop_event=asyncio.Event(),
+                )
+            new_pending_tasks = asyncio.all_tasks() - tasks_before_startup
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                new_pending_tasks.discard(current_task)
+            assert not new_pending_tasks, f"pending tasks after connection failure: {new_pending_tasks!r}"
 
         assert "network transport error" in str(error.value)
         assert REDACTION_TEST_API_KEY not in str(error.value)

@@ -706,7 +706,7 @@ async def _serve_sigterm_websocket(
             state.note_disconnected("news" if path.endswith("/news") else "stock")
     finally:
         writer.close()
-        try:
+        try:  # noqa: SIM105 - keep exception groups intact while suppressing direct errors
             await writer.wait_closed()
         except ConnectionError:
             pass
@@ -972,10 +972,12 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
         stop_event = asyncio.Event()
         logger = logging.Logger("startup-terminal-test")
 
-        async with ASGIWebSocketTransport(alpaca_app) as websocket_transport:
-            async with httpx2.AsyncClient(mounts={"ws://news.test": websocket_transport}, timeout=10) as client:
-                with pytest.raises(RuntimeError, match="alpaca news stream terminated") as error:
-                    await run_application(config, client, logger, stop_event, stock_starter=None)
+        async with (
+            ASGIWebSocketTransport(alpaca_app) as websocket_transport,
+            httpx2.AsyncClient(mounts={"ws://news.test": websocket_transport}, timeout=10) as client,
+        ):
+            with pytest.raises(RuntimeError, match="alpaca news stream terminated") as error:
+                await run_application(config, client, logger, stop_event, stock_starter=None)
 
         assert DUMMY_ALPACA_API_SECRET not in str(error.value)
         assert stop_event.is_set()

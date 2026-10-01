@@ -330,9 +330,12 @@ async def _wait_for_ack[EventT](
                 if not isinstance(subscriptions, dict):
                     subscriptions = message
                 acknowledged = subscriptions.get(config.channel)
-                if isinstance(acknowledged, list) and all(isinstance(symbol, str) for symbol in acknowledged):
-                    if set(config.symbols).issubset(acknowledged):
-                        return messages[:index] + messages[index + 1 :]
+                if (
+                    isinstance(acknowledged, list)
+                    and all(isinstance(symbol, str) for symbol in acknowledged)
+                    and set(config.symbols).issubset(acknowledged)
+                ):
+                    return messages[:index] + messages[index + 1 :]
                 detail = f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
                 raise AlpacaStreamError(detail)
     return None
