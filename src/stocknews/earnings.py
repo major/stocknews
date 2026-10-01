@@ -83,9 +83,3 @@ def has_blocked_phrases(headline: str, blocked_phrases: Sequence[str]) -> bool:
 
     headline_lower = headline.lower()
     return any(phrase.lower() in headline_lower for phrase in blocked_phrases)
-
-
-def is_analyst_rating_change(headline: str) -> bool:
-    """Return whether the headline mentions a price target."""
-
-    return "price target" in headline.lower()

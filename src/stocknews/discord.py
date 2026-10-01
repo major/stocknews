@@ -8,7 +8,7 @@ from typing import NotRequired, TypedDict
 import httpx2
 
 from stocknews.analyst import parse_analyst
-from stocknews.earnings import company_name, extract_earnings
+from stocknews.earnings import company_name, describe_earnings
 from stocknews.models import NewsItem
 
 _RAISES_COLOR = 0x4CAF50
@@ -46,16 +46,12 @@ def earnings_payload(
     transparent_png: str,
 ) -> WebhookPayload | None:
     """Build an earnings payload, or return None when no earnings data exists."""
-    earnings = extract_earnings(headline)
-    lines = sorted(
-        f"{'💚' if result.beat else '💔'} {kind}: {result.actual} vs. {result.estimate} est."
-        for kind, result in earnings.items()
-    )
-    if not lines:
+    description = describe_earnings(headline)
+    if not description:
         return None
 
     embed = _new_embed(f"{symbol}: {company_name(headline)}", stock_logo, symbol, transparent_png)
-    embed["description"] = "\n".join(lines)
+    embed["description"] = description
     return {"embeds": [embed]}
 
 

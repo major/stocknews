@@ -6,7 +6,6 @@ from stocknews.earnings import (
     describe_earnings,
     extract_earnings,
     has_blocked_phrases,
-    is_analyst_rating_change,
     is_earnings_news,
 )
 
@@ -63,8 +62,6 @@ def test_earnings_description_sorts_fields_and_company_name_is_a_prefix() -> Non
     assert beat_emoji(False) == "💔"
 
 
-def test_blocked_phrases_and_analyst_price_target_detection_ignore_case() -> None:
+def test_blocked_phrases_ignore_case() -> None:
     assert has_blocked_phrases("This would be WORTH it", ("would be worth",))
     assert not has_blocked_phrases("This is normal", ("spam", "scam"))
-    assert is_analyst_rating_change("Apple PRICE TARGET raised to $200")
-    assert not is_analyst_rating_change("Apple releases a new iPhone")
