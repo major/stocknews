@@ -923,7 +923,7 @@ def test_cancel_and_wait_preserves_mixed_base_exception_group() -> None:
                     [ordinary_error, cancellation_error],
                 )
                 mixed_errors.append(mixed_error)
-                raise mixed_error
+                raise mixed_error from cancellation_error
 
         task = asyncio.create_task(fail_with_mixed_group_when_cancelled())
         await task_started.wait()
