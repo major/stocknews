@@ -23,7 +23,7 @@ from stocknews.alpaca import AlpacaStreamError, StreamHandle
 from stocknews.models import AlpacaSettings, Config, Trade
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 EXPECTED_CONFIGURATION_ERROR_EXIT_CODE = 2
 EXPECTED_STARTUP_LOG_RECORD_COUNT = 2
@@ -41,6 +41,35 @@ DUMMY_FAILURE_CREDENTIALS = ("startup-failure-key", "startup-failure-secret")
 DUMMY_FAILURE_API_KEY, DUMMY_FAILURE_API_SECRET = DUMMY_FAILURE_CREDENTIALS
 DUMMY_REPR_CREDENTIALS = ("repr-test-key", "repr-test-secret")
 DUMMY_REPR_API_KEY, DUMMY_REPR_API_SECRET = DUMMY_REPR_CREDENTIALS
+STARTUP_TEST_LOGGER_NAMES = (
+    "startup-stream-test",
+    "startup-stock-termination-test",
+    "startup-terminal-test",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_startup_test_loggers() -> Iterator[None]:
+    """Isolate dedicated startup loggers and restore their shared state."""
+    loggers = [logging.getLogger(name) for name in STARTUP_TEST_LOGGER_NAMES]
+    states = [
+        (logger.handlers[:], logger.filters[:], logger.level, logger.propagate, logger.disabled) for logger in loggers
+    ]
+    for logger in loggers:
+        logger.handlers.clear()
+        logger.filters.clear()
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = False
+        logger.disabled = False
+
+    yield
+
+    for logger, (handlers, filters, level, propagate, disabled) in zip(loggers, states, strict=True):
+        logger.handlers[:] = handlers
+        logger.filters[:] = filters
+        logger.setLevel(level)
+        logger.propagate = propagate
+        logger.disabled = disabled
 
 
 class _ObservedTradeQueue(asyncio.Queue[Trade]):
@@ -222,7 +251,8 @@ async def _run_stock_eof_scenario(stock_completion: str, expect_trade: bool) -> 
         blocked_phrases=(),
     )
     output = StringIO()
-    logger = logging.Logger("startup-stream-test", level=logging.INFO)
+    logger = logging.getLogger("startup-stream-test")
+    logger.setLevel(logging.INFO)
     logger.addHandler(logging.StreamHandler(output))
     logger.addHandler(_TradeLogObserver(state.trade_logged))
     stop_event = asyncio.Event()
@@ -377,7 +407,7 @@ async def _run_terminated_stock_scenario() -> None:
         blocked_phrases=(),
     )
     stop_event = asyncio.Event()
-    logger = logging.Logger("startup-stock-termination-test")
+    logger = logging.getLogger("startup-stock-termination-test")
 
     async with ASGIWebSocketTransport(partial(_terminated_stock_news_app, state=state)) as websocket_transport:
         mounts = {
@@ -970,7 +1000,7 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
             blocked_phrases=(),
         )
         stop_event = asyncio.Event()
-        logger = logging.Logger("startup-terminal-test")
+        logger = logging.getLogger("startup-terminal-test")
 
         async with (
             ASGIWebSocketTransport(alpaca_app) as websocket_transport,

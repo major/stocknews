@@ -341,8 +341,35 @@ def _config() -> Config:
     )
 
 
+@pytest.fixture(autouse=True)
+def _restore_runtime_test_logger() -> Iterator[None]:
+    logger = logging.getLogger("stocknews.test.runtime")
+    previous_handlers = logger.handlers[:]
+    previous_level = logger.level
+    previous_filters = logger.filters[:]
+    previous_propagate = logger.propagate
+    previous_disabled = logger.disabled
+    yield
+    for handler in logger.handlers[:]:
+        if handler not in previous_handlers:
+            logger.removeHandler(handler)
+            if type(handler) is logging.StreamHandler:
+                handler.close()
+    logger.handlers[:] = previous_handlers
+    logger.setLevel(previous_level)
+    logger.filters[:] = previous_filters
+    logger.propagate = previous_propagate
+    logger.disabled = previous_disabled
+
+
 def _logger(output: StringIO) -> logging.Logger:
-    logger = logging.Logger("stocknews-test", level=logging.INFO)
+    logger = logging.getLogger("stocknews.test.runtime")
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.filters.clear()
+    logger.propagate = False
+    logger.disabled = False
     handler = logging.StreamHandler(output)
     handler.setFormatter(JSONFormatter())
     logger.addHandler(handler)

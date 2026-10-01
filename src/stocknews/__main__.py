@@ -16,7 +16,7 @@ from stocknews.alpaca import (
     start_trade_stream,
 )
 from stocknews.config import load_config
-from stocknews.logging import configure_logging
+from stocknews.logging import configure_logging, report_failure
 from stocknews.models import AlpacaSettings, Config, NewsItem, Trade
 from stocknews.runtime import run
 
@@ -168,8 +168,7 @@ async def _run() -> None:
     try:
         config = load_config(os.environ)
     except ValueError as error:
-        # Raw exception chains may carry Alpaca credentials; JSON logging only redacts webhooks.
-        logger.exception("invalid configuration", extra={"error": str(error)}, exc_info=False)
+        report_failure(logger, "invalid configuration", str(error))
         raise SystemExit(2) from error
 
     loop = asyncio.get_running_loop()
@@ -203,8 +202,7 @@ def main() -> None:
     except KeyboardInterrupt:
         return
     except Exception as error:
-        # Raw exception chains may carry Alpaca credentials; JSON logging only redacts webhooks.
-        logging.getLogger("stocknews").exception("stocknews failed", extra={"error": str(error)}, exc_info=False)
+        report_failure(logging.getLogger("stocknews"), "stocknews failed", str(error))
         raise SystemExit(1) from error
 
 
