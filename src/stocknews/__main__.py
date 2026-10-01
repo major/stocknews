@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 from collections.abc import AsyncIterable, Awaitable, Callable
+from contextlib import suppress
 from typing import Protocol, cast
 
 import httpx2
@@ -46,10 +47,8 @@ async def _cancel_and_wait[T](task: asyncio.Task[T]) -> None:
             continue
         except Exception:
             break
-    try:
+    with suppress(BaseException):
         task.result()
-    except BaseException:
-        pass
 
 
 async def _stream_events[T](

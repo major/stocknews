@@ -32,6 +32,12 @@ WEBSOCKET_PING_FRAME_OPCODE = 0x9
 WEBSOCKET_PONG_FRAME_OPCODE = 0xA
 WEBSOCKET_16_BIT_LENGTH_MARKER = 126
 WEBSOCKET_64_BIT_LENGTH_MARKER = 127
+DUMMY_ALPACA_CREDENTIALS = ("startup-test-key", "startup-test-secret")
+DUMMY_ALPACA_API_KEY, DUMMY_ALPACA_API_SECRET = DUMMY_ALPACA_CREDENTIALS
+DUMMY_FAILURE_CREDENTIALS = ("startup-failure-key", "startup-failure-secret")
+DUMMY_FAILURE_API_KEY, DUMMY_FAILURE_API_SECRET = DUMMY_FAILURE_CREDENTIALS
+DUMMY_REPR_CREDENTIALS = ("repr-test-key", "repr-test-secret")
+DUMMY_REPR_API_KEY, DUMMY_REPR_API_SECRET = DUMMY_REPR_CREDENTIALS
 
 
 class _ObservedTradeQueue(asyncio.Queue[Trade]):
@@ -201,8 +207,8 @@ async def _run_stock_eof_scenario(stock_completion: str, expect_trade: bool) -> 
     """
     state = _StockEofTestState(stock_completion, expect_trade)
     config = Config(
-        alpaca_api_key="startup-test-key",
-        alpaca_api_secret="startup-test-secret",
+        alpaca_api_key=DUMMY_ALPACA_API_KEY,
+        alpaca_api_secret=DUMMY_ALPACA_API_SECRET,
         alpaca_news_stream_url="ws://news.test/v1beta1/news",
         alpaca_stock_stream_url="wss://stocks.test/v2",
         discord_analyst_webhooks=(),
@@ -356,8 +362,8 @@ async def _run_terminated_stock_scenario() -> None:
     """Verify a terminated stock handle closes the active news stream."""
     state = _TerminatedStockTestState()
     config = Config(
-        alpaca_api_key="startup-test-key",
-        alpaca_api_secret="startup-test-secret",
+        alpaca_api_key=DUMMY_ALPACA_API_KEY,
+        alpaca_api_secret=DUMMY_ALPACA_API_SECRET,
         alpaca_news_stream_url="ws://news.test/v1beta1/news",
         alpaca_stock_stream_url="wss://stocks.test/v2",
         discord_analyst_webhooks=(),
@@ -394,7 +400,7 @@ async def _run_terminated_stock_scenario() -> None:
                 )
 
             assert str(error.value) == f"alpaca stock stream terminated: {state.failure_message}"
-            assert "startup-test-secret" not in str(error.value)
+            assert DUMMY_ALPACA_API_SECRET not in str(error.value)
             assert stop_event.is_set()
             assert len(state.stock_tasks) == 1 and state.stock_tasks[0].done()
             await asyncio.wait_for(state.news_disconnected.wait(), timeout=2)
@@ -529,7 +535,11 @@ async def _complete_websocket_upgrade(writer: asyncio.StreamWriter, key: str) ->
         writer: Stream writer for the new WebSocket connection.
         key: Client-provided WebSocket handshake key.
     """
-    digest = hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+    # RFC 6455 requires SHA-1 for the upgrade handshake, not for security.
+    digest = hashlib.sha1(
+        (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode(),
+        usedforsecurity=False,
+    ).digest()
     accept = base64.b64encode(digest).decode()
     response = (
         "HTTP/1.1 101 Switching Protocols\r\n"
@@ -737,8 +747,8 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
         environment = os.environ.copy()
         environment.update(
             {
-                "ALPACA_API_KEY": "startup-test-key",
-                "ALPACA_API_SECRET": "startup-test-secret",
+                "ALPACA_API_KEY": DUMMY_ALPACA_API_KEY,
+                "ALPACA_API_SECRET": DUMMY_ALPACA_API_SECRET,
                 "ALPACA_NEWS_STREAM_URL": f"ws://127.0.0.1:{port}/v1beta1/news",
                 "ALPACA_STOCK_STREAM_URL": f"ws://127.0.0.1:{port}/v2",
                 "DISCORD_ANALYST_WEBHOOKS": "",
@@ -768,8 +778,8 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
         records = [json.loads(line) for line in logs.splitlines()]
         assert any(record["msg"] == "starting stocknews" for record in records)
         assert any(record["msg"] == "shutdown requested" for record in records)
-        assert "startup-test-key" not in logs
-        assert "startup-test-secret" not in logs
+        assert DUMMY_ALPACA_API_KEY not in logs
+        assert DUMMY_ALPACA_API_SECRET not in logs
         if stop_during_authentication:
             assert "news" not in state.subscribed_streams
     finally:
@@ -785,16 +795,16 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
 def test_alpaca_settings_repr_omits_credentials() -> None:
     """Verify Alpaca settings representations do not expose credentials."""
     settings = AlpacaSettings(
-        api_key="repr-test-key",
-        api_secret="repr-test-secret",
+        api_key=DUMMY_REPR_API_KEY,
+        api_secret=DUMMY_REPR_API_SECRET,
         news_stream_url="ws://news.test/v1beta1/news",
         stock_stream_url="wss://stocks.test/v2",
     )
 
     representation = repr(settings)
 
-    assert "repr-test-key" not in representation
-    assert "repr-test-secret" not in representation
+    assert DUMMY_REPR_API_KEY not in representation
+    assert DUMMY_REPR_API_SECRET not in representation
     assert "ws://news.test/v1beta1/news" in representation
     assert "wss://stocks.test/v2" in representation
 
@@ -879,13 +889,13 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
                     await send_json(
                         [
                             {"T": "subscription", "news": ["*"]},
-                            {"T": "error", "code": 403, "msg": "rejected startup-test-secret"},
+                            {"T": "error", "code": 403, "msg": f"rejected {DUMMY_ALPACA_API_SECRET}"},
                         ]
                     )
 
         config = Config(
-            alpaca_api_key="startup-test-key",
-            alpaca_api_secret="startup-test-secret",
+            alpaca_api_key=DUMMY_ALPACA_API_KEY,
+            alpaca_api_secret=DUMMY_ALPACA_API_SECRET,
             alpaca_news_stream_url="ws://news.test/v1beta1/news",
             alpaca_stock_stream_url="wss://stocks.test/v2",
             discord_analyst_webhooks=(),
@@ -903,7 +913,7 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
                 with pytest.raises(RuntimeError, match="alpaca news stream terminated") as error:
                     await run_application(config, client, logger, stop_event, stock_starter=None)
 
-        assert "startup-test-secret" not in str(error.value)
+        assert DUMMY_ALPACA_API_SECRET not in str(error.value)
         assert stop_event.is_set()
         assert disconnected.is_set()
 
@@ -956,8 +966,8 @@ def test_cli_reports_initial_alpaca_connection_failure_with_exit_one() -> None:
             environment = os.environ.copy()
             environment.update(
                 {
-                    "ALPACA_API_KEY": "startup-failure-key",
-                    "ALPACA_API_SECRET": "startup-failure-secret",
+                    "ALPACA_API_KEY": DUMMY_FAILURE_API_KEY,
+                    "ALPACA_API_SECRET": DUMMY_FAILURE_API_SECRET,
                     "ALPACA_NEWS_STREAM_URL": f"ws://127.0.0.1:{port}/v1beta1/news",
                     "ALPACA_STOCK_STREAM_URL": f"ws://127.0.0.1:{port}/v2",
                     "DISCORD_ANALYST_WEBHOOKS": "",
@@ -981,8 +991,8 @@ def test_cli_reports_initial_alpaca_connection_failure_with_exit_one() -> None:
             records = [json.loads(line) for line in logs.splitlines()]
             failure = next(record for record in records if record["msg"] == "stocknews failed")
             assert "connect Alpaca news stream" in failure["error"]
-            assert "startup-failure-key" not in logs
-            assert "startup-failure-secret" not in logs
+            assert DUMMY_FAILURE_API_KEY not in logs
+            assert DUMMY_FAILURE_API_SECRET not in logs
         finally:
             if process is not None and process.returncode is None:
                 process.kill()

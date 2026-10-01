@@ -20,6 +20,8 @@ from stocknews.runtime import run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
+_DUMMY_ALPACA_CREDENTIALS = ("key", "secret")
+_DUMMY_ALPACA_API_KEY, _DUMMY_ALPACA_API_SECRET = _DUMMY_ALPACA_CREDENTIALS
 _EXPECTED_ALPACA_STREAM_NAMES = frozenset({"news", "stock"})
 type ASGIReceive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 type ASGISend = Callable[[MutableMapping[str, Any]], Awaitable[None]]
@@ -325,8 +327,8 @@ class _LogMessageEvent(logging.Handler):
 
 def _config() -> Config:
     return Config(
-        alpaca_api_key="key",
-        alpaca_api_secret="secret",
+        alpaca_api_key=_DUMMY_ALPACA_API_KEY,
+        alpaca_api_secret=_DUMMY_ALPACA_API_SECRET,
         alpaca_news_stream_url="wss://news.test",
         alpaca_stock_stream_url="wss://stocks.test",
         discord_analyst_webhooks=("https://discord.test/analyst",),

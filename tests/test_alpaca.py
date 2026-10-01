@@ -22,20 +22,36 @@ from stocknews.models import AlpacaSettings, NewsItem, Trade
 
 EXPECTED_EVENT_QUEUE_CAPACITY = 256
 
+# Fake credentials used by stream fixtures that do not inspect authentication.
+TEST_API_KEY = "key"
+TEST_API_CREDENTIAL = "secret"
+
+# Fake credentials used when tests inspect authentication requests.
+NEWS_TEST_API_KEY = "news-key"
+NEWS_TEST_API_CREDENTIAL = "news-secret"
+TRADE_TEST_API_KEY = "trade-key"
+TRADE_TEST_API_CREDENTIAL = "trade-secret"
+
+# Fake credentials deliberately included in failures to verify redaction.
+REDACTION_TEST_API_KEY = "private-key"
+REDACTION_TEST_API_CREDENTIAL = "private-secret"
+AUTH_FAILURE_API_KEY = "demo-key"
+AUTH_FAILURE_API_CREDENTIAL = "demo-secret"
+
 
 def test_alpaca_settings_repr_excludes_credentials() -> None:
     """Keep credentials private while showing configured stream URLs."""
     settings = AlpacaSettings(
-        api_key="private-key",
-        api_secret="private-secret",
+        api_key=REDACTION_TEST_API_KEY,
+        api_secret=REDACTION_TEST_API_CREDENTIAL,
         news_stream_url="ws://news.test/v1beta1/news",
         stock_stream_url="ws://stocks.test/v2",
     )
 
     representation = repr(settings)
 
-    assert "private-key" not in representation
-    assert "private-secret" not in representation
+    assert REDACTION_TEST_API_KEY not in representation
+    assert REDACTION_TEST_API_CREDENTIAL not in representation
     assert settings.news_stream_url in representation
     assert settings.stock_stream_url in representation
 
@@ -90,8 +106,8 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
             stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="news-key",
-                    api_secret="news-secret",
+                    api_key=NEWS_TEST_API_KEY,
+                    api_secret=NEWS_TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
                     stock_stream_url="ws://unused.test/v2",
                 ),
@@ -107,7 +123,7 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
                 url="https://example.test/news",
             )
             assert requests == [
-                {"action": "auth", "key": "news-key", "secret": "news-secret"},
+                {"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL},
                 {"action": "subscribe", "news": ["*"]},
             ]
             stop_event.set()
@@ -172,8 +188,8 @@ def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypat
             stream = await alpaca.start_trade_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="trade-key",
-                    api_secret="trade-secret",
+                    api_key=TRADE_TEST_API_KEY,
+                    api_secret=TRADE_TEST_API_CREDENTIAL,
                     news_stream_url="ws://unused.test/v1beta1/news",
                     stock_stream_url="ws://alpaca.test/v2/",
                 ),
@@ -194,9 +210,9 @@ def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypat
             assert second == first
             assert paths == ["/v2/iex", "/v2/iex"]
             assert requests == [
-                {"action": "auth", "key": "trade-key", "secret": "trade-secret"},
+                {"action": "auth", "key": TRADE_TEST_API_KEY, "secret": TRADE_TEST_API_CREDENTIAL},
                 {"action": "subscribe", "trades": ["SPY", "QQQ"]},
-                {"action": "auth", "key": "trade-key", "secret": "trade-secret"},
+                {"action": "auth", "key": TRADE_TEST_API_KEY, "secret": TRADE_TEST_API_CREDENTIAL},
                 {"action": "subscribe", "trades": ["SPY", "QQQ"]},
             ]
             assert stream.events.maxsize == EXPECTED_EVENT_QUEUE_CAPACITY
@@ -210,7 +226,11 @@ def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypat
     ("response", "diagnostic"),
     [
         (
-            {"T": "error", "code": 401, "msg": "invalid demo-key and demo-secret"},
+            {
+                "T": "error",
+                "code": 401,
+                "msg": f"invalid {AUTH_FAILURE_API_KEY} and {AUTH_FAILURE_API_CREDENTIAL}",
+            },
             "401",
         ),
         ({"T": "error", "msg": None, "code": True}, "server rejected the request"),
@@ -244,8 +264,8 @@ def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
                 await alpaca.start_trade_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="demo-key",
-                        api_secret="demo-secret",
+                        api_key=AUTH_FAILURE_API_KEY,
+                        api_secret=AUTH_FAILURE_API_CREDENTIAL,
                         news_stream_url="ws://unused.test/v1beta1/news",
                         stock_stream_url="ws://alpaca.test/v2",
                     ),
@@ -253,11 +273,11 @@ def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
                 )
         assert "authentication failed" in str(error.value)
         assert diagnostic in str(error.value)
-        assert "demo-key" not in str(error.value)
-        assert "demo-secret" not in str(error.value)
+        assert AUTH_FAILURE_API_KEY not in str(error.value)
+        assert AUTH_FAILURE_API_CREDENTIAL not in str(error.value)
         formatted = "".join(traceback.format_exception(error.value))
-        assert "demo-key" not in formatted
-        assert "demo-secret" not in formatted
+        assert AUTH_FAILURE_API_KEY not in formatted
+        assert AUTH_FAILURE_API_CREDENTIAL not in formatted
 
     asyncio.run(scenario())
 
@@ -265,8 +285,8 @@ def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
 @pytest.mark.parametrize(
     "failure",
     [
-        httpx2.ConnectError("private-key private-secret"),
-        httpx2.ConnectTimeout("private-key private-secret"),
+        httpx2.ConnectError(f"{REDACTION_TEST_API_KEY} {REDACTION_TEST_API_CREDENTIAL}"),
+        httpx2.ConnectTimeout(f"{REDACTION_TEST_API_KEY} {REDACTION_TEST_API_CREDENTIAL}"),
     ],
     ids=["connection-refused", "connection-timeout"],
 )
@@ -300,8 +320,8 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
                     await alpaca.start_news_stream(
                         client,
                         settings=AlpacaSettings(
-                            api_key="private-key",
-                            api_secret="private-secret",
+                            api_key=REDACTION_TEST_API_KEY,
+                            api_secret=REDACTION_TEST_API_CREDENTIAL,
                             news_stream_url="ws://alpaca.test/v1beta1/news",
                             stock_stream_url="ws://unused.test/v2",
                         ),
@@ -314,11 +334,11 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
                 assert not new_pending_tasks, f"pending tasks after connection failure: {new_pending_tasks!r}"
 
         assert "network transport error" in str(error.value)
-        assert "private-key" not in str(error.value)
-        assert "private-secret" not in str(error.value)
+        assert REDACTION_TEST_API_KEY not in str(error.value)
+        assert REDACTION_TEST_API_CREDENTIAL not in str(error.value)
         formatted = "".join(traceback.format_exception(error.value))
-        assert "private-key" not in formatted
-        assert "private-secret" not in formatted
+        assert REDACTION_TEST_API_KEY not in formatted
+        assert REDACTION_TEST_API_CREDENTIAL not in formatted
 
     asyncio.run(scenario())
 
@@ -348,8 +368,8 @@ def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkey
                 await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -393,8 +413,8 @@ def test_invalid_handshake_messages_fail_startup(response: str, diagnostic: str)
                 await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -431,8 +451,8 @@ def test_malformed_established_message_terminates_the_stream() -> None:
             stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
                     stock_stream_url="ws://unused.test/v2",
                 ),
@@ -475,8 +495,8 @@ def test_unexpected_binary_message_terminates_the_stream() -> None:
             stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
                     stock_stream_url="ws://unused.test/v2",
                 ),
@@ -532,8 +552,8 @@ def test_invalid_news_field_terminates_established_stream(field: str, value: obj
             stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
                     stock_stream_url="ws://unused.test/v2",
                 ),
@@ -601,8 +621,8 @@ def test_invalid_trade_number_terminates_established_stream(field: str, value: o
             stream = await alpaca.start_trade_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://unused.test/v1beta1/news",
                     stock_stream_url="ws://alpaca.test/v2",
                 ),
@@ -638,8 +658,8 @@ def test_terminal_protocol_error_without_callback_raises_from_stream_task() -> N
             stream = await alpaca.start_trade_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://unused.test/v1beta1/news",
                     stock_stream_url="ws://alpaca.test/v2",
                 ),
@@ -673,8 +693,8 @@ def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None
                 await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -716,7 +736,14 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
                     await send({"type": "websocket.close", "code": 1001, "reason": "reconnect"})
                     return
                 else:
-                    await _send_json(send, {"T": "error", "code": 403, "msg": "subscription rejected: private-secret"})
+                    await _send_json(
+                        send,
+                        {
+                            "T": "error",
+                            "code": 403,
+                            "msg": f"subscription rejected: {REDACTION_TEST_API_CREDENTIAL}",
+                        },
+                    )
                     return
 
         stop_event = asyncio.Event()
@@ -725,8 +752,8 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
             stream = await alpaca.start_trade_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="private-key",
-                    api_secret="private-secret",
+                    api_key=REDACTION_TEST_API_KEY,
+                    api_secret=REDACTION_TEST_API_CREDENTIAL,
                     news_stream_url="ws://unused.test/v1beta1/news",
                     stock_stream_url="ws://alpaca.test/v2",
                 ),
@@ -738,8 +765,8 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
         assert len(terminal_errors) == 1
         assert "subscription failed" in str(terminal_errors[0])
         assert "403" in str(terminal_errors[0])
-        assert "private-key" not in str(terminal_errors[0])
-        assert "private-secret" not in str(terminal_errors[0])
+        assert REDACTION_TEST_API_KEY not in str(terminal_errors[0])
+        assert REDACTION_TEST_API_CREDENTIAL not in str(terminal_errors[0])
         assert [request["action"] for request in requests] == ["auth", "subscribe", "auth", "subscribe"]
         assert not stop_event.is_set()
 
@@ -955,8 +982,8 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
                 stream = await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="news-key",
-                        api_secret="news-secret",
+                        api_key=NEWS_TEST_API_KEY,
+                        api_secret=NEWS_TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -966,7 +993,7 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
                 assert item.summary == summary
                 assert item.symbols == ("AAPL",)
                 assert requests == [
-                    {"action": "auth", "key": "news-key", "secret": "news-secret"},
+                    {"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL},
                     {"action": "subscribe", "news": ["*"]},
                 ]
                 stop_event.set()
@@ -1008,8 +1035,8 @@ def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: 
                 await alpaca.start_trade_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://unused.test/v1beta1/news",
                         stock_stream_url=f"{server.url}/v2",
                     ),
@@ -1068,8 +1095,8 @@ def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest
                 stream = await alpaca.start_trade_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://unused.test/v1beta1/news",
                         stock_stream_url=f"{server.url}/v2",
                     ),
@@ -1114,8 +1141,8 @@ def test_loopback_initial_upgrade_failure_remains_a_startup_failure(status_code:
                     await alpaca.start_news_stream(
                         client,
                         settings=AlpacaSettings(
-                            api_key="key",
-                            api_secret="secret",
+                            api_key=TEST_API_KEY,
+                            api_secret=TEST_API_CREDENTIAL,
                             news_stream_url=f"{server.url}/news",
                             stock_stream_url="ws://unused.test/v2",
                         ),
@@ -1158,8 +1185,8 @@ def test_loopback_acknowledgement_timeout_covers_the_entire_stage(monkeypatch: p
                 await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -1218,8 +1245,8 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
                 stream = await alpaca.start_trade_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://unused.test/v1beta1/news",
                         stock_stream_url=f"{server.url}/v2",
                     ),
@@ -1287,8 +1314,8 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
             stream = await alpaca.start_trade_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://unused.test/v1beta1/news",
                     stock_stream_url="ws://alpaca.test/v2",
                 ),
@@ -1337,8 +1364,11 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
                     await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
 
         mixed_error = ExceptionGroup(
-            "ping failed while handling private-secret",
-            [httpcore2.WriteTimeout("private-secret"), ValueError("private-key")],
+            f"ping failed while handling {REDACTION_TEST_API_CREDENTIAL}",
+            [
+                httpcore2.WriteTimeout(REDACTION_TEST_API_CREDENTIAL),
+                ValueError(REDACTION_TEST_API_KEY),
+            ],
         )
         transport = _PingFailureTransport(app, {1: mixed_error})
         terminal: list[alpaca.AlpacaStreamError] = []
@@ -1346,8 +1376,8 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
             stream = await alpaca.start_trade_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="private-key",
-                    api_secret="private-secret",
+                    api_key=REDACTION_TEST_API_KEY,
+                    api_secret=REDACTION_TEST_API_CREDENTIAL,
                     news_stream_url="ws://unused.test/v1beta1/news",
                     stock_stream_url="ws://alpaca.test/v2",
                 ),
@@ -1362,8 +1392,8 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
         assert terminal[0].__cause__ is None
         assert terminal[0].__context__ is None
         formatted = "".join(traceback.format_exception(terminal[0]))
-        assert "private-key" not in formatted
-        assert "private-secret" not in formatted
+        assert REDACTION_TEST_API_KEY not in formatted
+        assert REDACTION_TEST_API_CREDENTIAL not in formatted
         assert [request["action"] for request in requests] == ["auth", "subscribe"]
         assert connection_count == 1
 
@@ -1398,8 +1428,8 @@ def test_loopback_oversized_message_is_terminal_with_1009_diagnostic(monkeypatch
                 stream = await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -1453,8 +1483,8 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
                     alpaca.start_news_stream(
                         client,
                         settings=AlpacaSettings(
-                            api_key="key",
-                            api_secret="secret",
+                            api_key=TEST_API_KEY,
+                            api_secret=TEST_API_CREDENTIAL,
                             news_stream_url=f"{server.url}/news",
                             stock_stream_url="ws://unused.test/v2",
                         ),
@@ -1520,8 +1550,8 @@ def test_loopback_stop_cancels_reconnect_backoff() -> None:
                 stream = await alpaca.start_trade_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://unused.test/v1beta1/news",
                         stock_stream_url=f"{server.url}/v2",
                     ),
@@ -1573,8 +1603,8 @@ def test_loopback_stop_cancels_when_bounded_queue_is_full() -> None:
                 stream = await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="key",
-                        api_secret="secret",
+                        api_key=TEST_API_KEY,
+                        api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -1620,8 +1650,8 @@ def test_stop_event_closes_an_established_idle_news_stream() -> None:
             stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
-                    api_key="key",
-                    api_secret="secret",
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
                     stock_stream_url="ws://unused.test/v2",
                 ),
@@ -1641,16 +1671,16 @@ def test_stop_event_closes_an_established_idle_news_stream() -> None:
     ("api_secret", "reason", "expected_detail"),
     [
         (
-            "private-secret",
-            "provider rejected private-key and private-secret",
+            REDACTION_TEST_API_CREDENTIAL,
+            f"provider rejected {REDACTION_TEST_API_KEY} and {REDACTION_TEST_API_CREDENTIAL}",
             "WebSocket disconnected with code 1008: provider rejected [redacted] and [redacted]",
         ),
         (
             "",
-            "provider rejected private-key",
+            f"provider rejected {REDACTION_TEST_API_KEY}",
             "WebSocket disconnected with code 1008: provider rejected [redacted]",
         ),
-        ("private-secret", "", "WebSocket disconnected with code 1008"),
+        (REDACTION_TEST_API_CREDENTIAL, "", "WebSocket disconnected with code 1008"),
     ],
     ids=["redact-both-credentials", "empty-secret-is-safe", "empty-provider-reason"],
 )
@@ -1685,7 +1715,7 @@ def test_initial_websocket_disconnect_reports_a_safe_diagnostic(
                 await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="private-key",
+                        api_key=REDACTION_TEST_API_KEY,
                         api_secret=api_secret,
                         news_stream_url=f"{server.url}/v1beta1/news",
                         stock_stream_url="ws://unused.test/v2",
@@ -1694,7 +1724,7 @@ def test_initial_websocket_disconnect_reports_a_safe_diagnostic(
                 )
 
         assert str(error.value) == f"Alpaca news stream initial connection failed: {expected_detail}"
-        assert "private-key" not in str(error.value)
+        assert REDACTION_TEST_API_KEY not in str(error.value)
         if api_secret:
             assert api_secret not in str(error.value)
 
@@ -1722,8 +1752,8 @@ def test_initial_loopback_socket_reset_fails_stream_startup() -> None:
                 await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
-                        api_key="private-key",
-                        api_secret="private-secret",
+                        api_key=REDACTION_TEST_API_KEY,
+                        api_secret=REDACTION_TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
                         stock_stream_url="ws://unused.test/v2",
                     ),
@@ -1731,7 +1761,7 @@ def test_initial_loopback_socket_reset_fails_stream_startup() -> None:
                 )
 
         assert server.connection_count == 1
-        assert "private-key" not in str(error.value)
-        assert "private-secret" not in str(error.value)
+        assert REDACTION_TEST_API_KEY not in str(error.value)
+        assert REDACTION_TEST_API_CREDENTIAL not in str(error.value)
 
     asyncio.run(scenario())

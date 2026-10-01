@@ -150,7 +150,7 @@ async def _settle_task(
     except Exception as task_error:
         return interrupted, task_error
     except BaseException:
-        pass
+        return interrupted, None
     return interrupted, None
 
 
@@ -200,7 +200,8 @@ def _process_news_read(
             state.jobs.put_nowait(delivery)
         except asyncio.QueueFull as error:
             raise RuntimeError("Discord delivery queue is full") from error
-    assert state.news_iterator is not None
+    if state.news_iterator is None:
+        raise RuntimeError("news stream read completed without an active iterator")
     state.news_read = asyncio.create_task(_next(state.news_iterator))
     return False
 
@@ -232,14 +233,16 @@ def _process_stock_read(
             "tape": trade_message.tape,
         },
     )
-    assert state.stock_iterator is not None
+    if state.stock_iterator is None:
+        raise RuntimeError("stock stream read completed without an active iterator")
     state.stock_read = asyncio.create_task(_next(state.stock_iterator))
     return False
 
 
 async def _pump_streams(state: _RunState, config: Config, logger: logging.Logger) -> None:
     while True:
-        assert state.news_read is not None
+        if state.news_read is None:
+            raise RuntimeError("news stream read task is unavailable while pumping streams")
         waiting: set[asyncio.Task[object]] = {cast("asyncio.Task[object]", state.news_read)}
         if state.stock_read is not None:
             waiting.add(cast("asyncio.Task[object]", state.stock_read))
