@@ -2,17 +2,22 @@
 
 import asyncio
 import json
-from collections.abc import Sequence
-from typing import NotRequired, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 import httpx2
 
 from stocknews.analyst import parse_analyst
 from stocknews.earnings import company_name, describe_earnings
-from stocknews.models import NewsItem
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from stocknews.models import NewsItem
 
 _RAISES_COLOR = 0x4CAF50
 _LOWERS_COLOR = 0xD42020
+_HTTP_SUCCESS_STATUS_MIN = 200
+_HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE = 300
 _WEBHOOK_DEADLINE_SECONDS = 10.0
 
 
@@ -130,7 +135,7 @@ async def send_payload(
 
                 response = await client.send(request, stream=True)
                 try:
-                    if not 200 <= response.status_code < 300:
+                    if not _HTTP_SUCCESS_STATUS_MIN <= response.status_code < _HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE:
                         errors.append(f"post webhook: unexpected status {response.status_code}")
                 finally:
                     await response.aclose()

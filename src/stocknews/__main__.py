@@ -4,8 +4,8 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import cast
+from contextlib import suppress
+from typing import TYPE_CHECKING, Protocol, cast
 
 import httpx2
 
@@ -16,11 +16,27 @@ from stocknews.alpaca import (
     start_trade_stream,
 )
 from stocknews.config import load_config
-from stocknews.logging import configure_logging
-from stocknews.models import Config, NewsItem, Trade
+from stocknews.logging import configure_logging, report_failure
+from stocknews.models import AlpacaSettings, Config, NewsItem, Trade
 from stocknews.runtime import run
 
-type TradeStreamStarter = Callable[..., Awaitable[StreamHandle[Trade]]]
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterable, Awaitable, Callable
+
+
+class TradeStreamStarter(Protocol):
+    """Start a trade stream with shared Alpaca settings and shutdown signals."""
+
+    def __call__(
+        self,
+        client: httpx2.AsyncClient,
+        *,
+        settings: AlpacaSettings,
+        stop_event: asyncio.Event,
+        on_terminated: Callable[[AlpacaStreamError], None] | None = None,
+    ) -> Awaitable[StreamHandle[Trade]]:
+        """Return an awaitable that initializes the trade stream handle."""
+        ...
 
 
 async def _cancel_and_wait[T](task: asyncio.Task[T]) -> None:
@@ -31,12 +47,11 @@ async def _cancel_and_wait[T](task: asyncio.Task[T]) -> None:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             continue
-        except Exception:
+        # Preserve mixed BaseExceptionGroups while draining ordinary task errors.
+        except Exception:  # noqa: BLE001
             break
-    try:
+    with suppress(BaseException):
         task.result()
-    except BaseException:
-        pass
 
 
 async def _stream_events[T](
@@ -54,11 +69,11 @@ async def _stream_events[T](
         event = asyncio.create_task(handle.events.get())
         try:
             waiting: set[asyncio.Future[object]] = {
-                cast(asyncio.Future[object], event),
-                cast(asyncio.Future[object], terminated),
+                cast("asyncio.Future[object]", event),
+                cast("asyncio.Future[object]", terminated),
             }
             if not handle.task.done():
-                waiting.add(cast(asyncio.Future[object], handle.task))
+                waiting.add(cast("asyncio.Future[object]", handle.task))
             completed, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
 
             if terminated in completed:
@@ -82,7 +97,24 @@ async def run_application(
     stop_event: asyncio.Event,
     stock_starter: TradeStreamStarter | None = start_trade_stream,
 ) -> None:
+    """Run the news and optional stock streams until shutdown.
+
+    Set ``stop_event`` and await started stream tasks when the run exits.
+
+    Args:
+        config: Alpaca, Discord, and routing configuration.
+        client: HTTP client used by the streams and webhook delivery.
+        logger: Logger used for runtime events.
+        stop_event: Event used to stop the stream adapters.
+        stock_starter: Optional function that starts the stock stream.
+    """
     loop = asyncio.get_running_loop()
+    settings = AlpacaSettings(
+        api_key=config.alpaca_api_key,
+        api_secret=config.alpaca_api_secret,
+        news_stream_url=config.alpaca_news_stream_url,
+        stock_stream_url=config.alpaca_stock_stream_url,
+    )
     news_terminated: asyncio.Future[AlpacaStreamError] = loop.create_future()
     stock_terminated: asyncio.Future[AlpacaStreamError] = loop.create_future()
     handles: list[StreamHandle[NewsItem] | StreamHandle[Trade]] = []
@@ -98,9 +130,7 @@ async def run_application(
     async def connect_news() -> AsyncIterable[NewsItem]:
         handle = await start_news_stream(
             client,
-            url=config.alpaca_news_stream_url,
-            api_key=config.alpaca_api_key,
-            api_secret=config.alpaca_api_secret,
+            settings=settings,
             stop_event=stop_event,
             on_terminated=terminate_news,
         )
@@ -113,9 +143,7 @@ async def run_application(
         async def connect_stock() -> AsyncIterable[Trade]:
             handle = await stock_starter(
                 client,
-                base_url=config.alpaca_stock_stream_url,
-                api_key=config.alpaca_api_key,
-                api_secret=config.alpaca_api_secret,
+                settings=settings,
                 stop_event=stop_event,
                 on_terminated=terminate_stock,
             )
@@ -140,14 +168,15 @@ async def _run() -> None:
     try:
         config = load_config(os.environ)
     except ValueError as error:
-        logger.error("invalid configuration", extra={"error": str(error)})
+        report_failure(logger, "invalid configuration", str(error))
         raise SystemExit(2) from error
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     task = asyncio.current_task()
     if task is None:
-        raise RuntimeError("stocknews startup has no active task")
+        error_message = "stocknews startup has no active task"
+        raise RuntimeError(error_message)
 
     def request_shutdown() -> None:
         stop_event.set()
@@ -173,7 +202,7 @@ def main() -> None:
     except KeyboardInterrupt:
         return
     except Exception as error:
-        logging.getLogger("stocknews").error("stocknews failed", extra={"error": str(error)})
+        report_failure(logging.getLogger("stocknews"), "stocknews failed", str(error))
         raise SystemExit(1) from error
 
 

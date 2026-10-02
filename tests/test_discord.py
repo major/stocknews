@@ -19,6 +19,7 @@ TRANSPARENT_PNG = "https://major.io/transparent.png"
 
 
 def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
+    """Format earnings embeds and send them as JSON to the webhook."""
     payload = earnings_payload(
         "AAPL",
         "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
@@ -78,6 +79,7 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
     title: str,
     color: int,
 ) -> None:
+    """Format analyst targets, colors, and fallback titles in webhook embeds."""
     symbol = "AAPL" if "Apple" in headline else "AMZN"
 
     payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
@@ -118,10 +120,12 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
     ],
 )
 def test_analyst_payload_suppresses_announced_or_maintained_targets(headline: str) -> None:
+    """Omit analyst embeds for announced or maintained price targets."""
     assert analyst_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG) is None
 
 
 def test_analyst_payload_omits_empty_headline_description() -> None:
+    """Leave the description field out when the analyst headline is empty."""
     payload = analyst_payload("AAPL", "", STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
@@ -129,6 +133,7 @@ def test_analyst_payload_omits_empty_headline_description() -> None:
 
 
 def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> None:
+    """Use the first symbol and omit empty news fields from the embed."""
     item = NewsItem(
         symbols=("AAPL", "MSFT"),
         author="Benzinga Newsdesk",
@@ -178,6 +183,7 @@ def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> Non
 
 
 def test_send_payload_posts_json_sequentially_and_accepts_all_2xx() -> None:
+    """Post the JSON payload to each webhook in order and accept all 2xx statuses."""
     requested: list[str] = []
     statuses = {"one": 200, "two": 201, "three": 204, "four": 299}
     item = NewsItem(
@@ -211,12 +217,14 @@ def test_send_payload_posts_json_sequentially_and_accepts_all_2xx() -> None:
 
 
 def test_send_payload_isolates_failures_and_sanitizes_errors() -> None:
+    """Continue webhook fanout after failures and omit private URLs from errors."""
     requested: list[str] = []
     secret_paths = {
         "status-secret": "status",
         "network-secret": "network",
         "success": "success",
     }
+    network_failure_message = "network failed"
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
         endpoint = request.url.path.rsplit("/", maxsplit=1)[-1]
@@ -224,7 +232,7 @@ def test_send_payload_isolates_failures_and_sanitizes_errors() -> None:
         if endpoint == "status-secret":
             return httpx2.Response(503)
         if endpoint == "network-secret":
-            raise httpx2.ConnectError("network failed", request=request)
+            raise httpx2.ConnectError(network_failure_message, request=request)
         return httpx2.Response(204)
 
     async def run() -> str:
@@ -258,6 +266,7 @@ def test_send_payload_sanitizes_invalid_webhooks_and_continues(
     bad_webhook: str,
     secret_values: tuple[str, ...],
 ) -> None:
+    """Skip malformed webhook URLs, sanitize their errors, and continue fanout."""
     requested: list[str] = []
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
@@ -286,6 +295,7 @@ def test_send_payload_sanitizes_invalid_webhooks_and_continues(
 
 
 def test_send_payload_serializes_before_sending() -> None:
+    """Reject unserializable payloads before making any webhook request."""
     requests: list[httpx2.Request] = []
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
@@ -306,12 +316,15 @@ def test_send_payload_serializes_before_sending() -> None:
 
 
 def test_send_payload_does_not_hide_programming_errors() -> None:
+    """Propagate unexpected errors raised by the transport handler."""
+    transport_handler_error_message = "transport handler bug"
+
     async def handler(_request: httpx2.Request) -> httpx2.Response:
-        raise ValueError("transport handler bug")
+        raise ValueError(transport_handler_error_message)
 
     async def run() -> None:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-            with pytest.raises(ValueError, match="transport handler bug"):
+            with pytest.raises(ValueError, match=transport_handler_error_message):
                 await send_payload(
                     client,
                     ["https://discord.test/webhook"],
@@ -339,6 +352,8 @@ async def _read_request_path(reader: asyncio.StreamReader) -> str | None:
 
 @pytest.mark.allow_hosts(["127.0.0.1"])
 def test_send_payload_closes_unfinished_response_and_continues() -> None:
+    """Close an unfinished response before continuing to the next webhook."""
+
     async def run() -> None:
         requested: list[str] = []
         first_response_closed = asyncio.Event()
@@ -383,6 +398,8 @@ def test_send_payload_closes_unfinished_response_and_continues() -> None:
 
 @pytest.mark.allow_hosts(["127.0.0.1"])
 def test_send_payload_deadline_is_sanitized_and_fanout_continues() -> None:
+    """Sanitize a request deadline error and continue sending to later webhooks."""
+
     async def run() -> None:
         requested: list[str] = []
         first_request_closed = asyncio.Event()
@@ -433,6 +450,8 @@ def test_send_payload_deadline_is_sanitized_and_fanout_continues() -> None:
 
 @pytest.mark.allow_hosts(["127.0.0.1"])
 def test_send_payload_propagates_external_cancellation() -> None:
+    """Propagate caller cancellation without sending to later webhooks."""
+
     async def run() -> None:
         requested: list[str] = []
         first_request_received = asyncio.Event()

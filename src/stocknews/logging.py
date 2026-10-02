@@ -33,6 +33,7 @@ class JSONFormatter(logging.Formatter):
     """Format one log record as a JSON object."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format a record as JSON and redact webhook URLs."""
         timestamp = datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds")
         fields: dict[str, Any] = {
             "time": timestamp,
@@ -58,3 +59,12 @@ def configure_logging(stream: TextIO | None = None) -> logging.Logger:
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
     logging.getLogger("httpx2").setLevel(logging.WARNING)
     return logging.getLogger("stocknews")
+
+
+def report_failure(logger: logging.Logger, message: str, error_summary: str) -> None:
+    """Log an approved failure summary without exception information.
+
+    This deliberately omits raw traceback, cause, and context. It does not
+    sanitize arbitrary summary text, so callers must provide a safe summary.
+    """
+    logger.error(message, extra={"error": error_summary})

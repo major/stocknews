@@ -1,3 +1,5 @@
+"""Property tests for news precedence and earnings extraction."""
+
 from string import ascii_lowercase
 
 from hypothesis import given
@@ -16,6 +18,7 @@ def test_html_entities_and_case_do_not_override_blocked_phrase_precedence(
     blocked_phrase: str,
     rejection: str,
 ) -> None:
+    """Keep blocked-phrase rejection first after entity decoding and case folding."""
     encoded_headline = "".join(f"&#{ord(character)};" for character in blocked_phrase)
     rejection_fields = {
         "symbol_count": ((), "Someone else"),
@@ -64,6 +67,7 @@ def _earnings_clauses(draw: st.DrawFn) -> list[tuple[str, str, str, str]]:
 def test_earnings_extraction_keeps_last_generated_clause_per_field(
     clauses: list[tuple[str, str, str, str]],
 ) -> None:
+    """Extract the last generated earnings clause for each field."""
     headline = "; ".join(
         f"{kind} {actual} {outcome} {estimate} Estimate" for kind, actual, outcome, estimate in clauses
     )

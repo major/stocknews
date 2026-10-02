@@ -1,8 +1,11 @@
 """Load application settings from an explicit environment mapping."""
 
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from stocknews.models import Config
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _DEFAULT_NEWS_STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
 _DEFAULT_STOCK_STREAM_URL = "wss://stream.data.alpaca.markets/v2"
@@ -13,13 +16,11 @@ _DEFAULT_BLOCKED_PHRASES = "if you invested,you would have,would be worth"
 
 def csv_values(value: str) -> tuple[str, ...]:
     """Split comma-separated values, trimming whitespace and dropping empties."""
-
     return tuple(part for raw_part in value.split(",") if (part := raw_part.strip()))
 
 
 def load_config(environ: Mapping[str, str]) -> Config:
     """Load settings from ``environ`` while preserving explicitly empty values."""
-
     api_key = _required_env(environ, "ALPACA_API_KEY")
     api_secret = _required_env(environ, "ALPACA_API_SECRET")
     return Config(
@@ -39,5 +40,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
 def _required_env(environ: Mapping[str, str], key: str) -> str:
     value = environ.get(key)
     if value is None or not value.strip():
-        raise ValueError(f"{key} is required")
+        error_message = f"{key} is required"
+        raise ValueError(error_message)
     return value

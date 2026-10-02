@@ -1,8 +1,11 @@
 """Recognize and format earnings headlines."""
 
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _EARNINGS_NEWS_RE = re.compile(
     r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[KMB]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[KMB]*)",
@@ -26,7 +29,6 @@ class EarningsResult:
 
 def is_earnings_news(headline: str) -> bool:
     """Return whether the headline has an earnings format suitable for routing."""
-
     headline_lower = headline.lower()
     return (
         "up from" not in headline_lower
@@ -37,7 +39,6 @@ def is_earnings_news(headline: str) -> bool:
 
 def extract_earnings(headline: str) -> dict[str, EarningsResult]:
     """Extract EPS and Sales values, keeping the last match for each field."""
-
     results: dict[str, EarningsResult] = {}
     for match in _EARNINGS_DATA_RE.finditer(headline):
         kind = "Sales" if match.group(1).upper() == "SALES" else "EPS"
@@ -51,26 +52,22 @@ def extract_earnings(headline: str) -> dict[str, EarningsResult]:
 
 def parse_result(raw: str) -> bool:
     """Return whether the result text indicates that the company beat estimates."""
-
     return "beat" in raw.lower()
 
 
 def company_name(headline: str) -> str:
     """Return the prefix before a Q1 through Q4 marker, if present."""
-
     match = _COMPANY_RE.search(headline)
     return match.group(1) if match else ""
 
 
 def beat_emoji(value: bool) -> str:
     """Return the display marker for a beat or miss."""
-
     return "💚" if value else "💔"
 
 
 def describe_earnings(headline: str) -> str:
     """Format extracted earnings fields in deterministic sorted order."""
-
     lines = [
         f"{beat_emoji(result.beat)} {kind}: {result.actual} vs. {result.estimate} est."
         for kind, result in extract_earnings(headline).items()
@@ -80,6 +77,5 @@ def describe_earnings(headline: str) -> str:
 
 def has_blocked_phrases(headline: str, blocked_phrases: Sequence[str]) -> bool:
     """Return whether the headline contains a blocked phrase, ignoring case."""
-
     headline_lower = headline.lower()
     return any(phrase.lower() in headline_lower for phrase in blocked_phrases)

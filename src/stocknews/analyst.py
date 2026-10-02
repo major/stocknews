@@ -28,7 +28,6 @@ class AnalystReport:
 
 def parse_analyst(headline: str) -> AnalystReport:
     """Parse an analyst headline and its first dollar-denominated price."""
-
     maintains_match = _MAINTAINS_RE.search(headline)
     if maintains_match is not None:
         firm, action, raw_guidance, stock = maintains_match.groups()
@@ -60,6 +59,5 @@ def parse_analyst(headline: str) -> AnalystReport:
 
 
 def _trim_rating(value: str) -> str:
-    if value.endswith("Rating"):
-        value = value[: -len("Rating")]
+    value = value.removesuffix("Rating")
     return _WHITESPACE_RE.sub(" ", value).strip()

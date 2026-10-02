@@ -1,3 +1,5 @@
+"""Tests for news classification and rejection precedence."""
+
 from stocknews.models import NewsItem
 from stocknews.news import classify_news
 
@@ -7,6 +9,7 @@ def _item(symbols: tuple[str, ...], author: str, headline: str) -> NewsItem:
 
 
 def test_news_rejections_follow_symbol_then_author_order() -> None:
+    """Apply symbol validation before author approval when classifying news."""
     blocked = ()
     assert classify_news(_item(("AAPL", "MSFT"), "Someone else", "headline"), blocked) == "symbol_count"
     assert classify_news(_item(("  ",), "Someone else", "headline"), blocked) == "empty_symbol"
@@ -16,6 +19,7 @@ def test_news_rejections_follow_symbol_then_author_order() -> None:
 
 
 def test_news_unescapes_encoded_headline_characters_before_blocking_and_classifying() -> None:
+    """Decode HTML entities before checking blocked phrases and headline categories."""
     assert (
         classify_news(
             _item(("AAPL",), "Benzinga Newsdesk", "AAPL Q1 EPS $2.00 vs $1.80 est. &amp; sp&#97;m"),
@@ -40,4 +44,5 @@ def test_news_unescapes_encoded_headline_characters_before_blocking_and_classify
 
 
 def test_blocked_phrase_rejection_precedes_symbol_rejection() -> None:
+    """Reject a blocked headline before checking whether it has any symbols."""
     assert classify_news(_item((), "Someone else", "Spam headline"), ("spam",)) == "blocked_phrase"

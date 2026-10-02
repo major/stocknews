@@ -1,19 +1,15 @@
 """Async WebSocket adapters for Alpaca news and stock trades."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import math
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 import anyio
 import httpcore2
 import httpx2
 from httpx2.websockets import (
-    AsyncWebSocketSession,
     HTTPXWSException,
     WebSocketDisconnect,
     WebSocketNetworkError,
@@ -21,6 +17,13 @@ from httpx2.websockets import (
 )
 
 from .models import NewsItem, Trade
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from httpx2.websockets import AsyncWebSocketSession
+
+    from .models import AlpacaSettings
 
 __all__ = [
     "AlpacaStreamError",
@@ -36,12 +39,12 @@ KEEPALIVE_PING_INTERVAL_SECONDS = 20
 KEEPALIVE_PING_TIMEOUT_SECONDS = 20
 MAX_MESSAGE_SIZE_BYTES = 16 * 1024 * 1024
 UINT32_MAX = 2**32 - 1
-
-EventT = TypeVar("EventT")
+WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
+HTTP_SERVER_ERROR_STATUS_CODE = 500
 
 
 @dataclass(frozen=True, slots=True)
-class _StreamConfig(Generic[EventT]):
+class _StreamConfig[EventT]:
     client: httpx2.AsyncClient
     url: str
     api_key: str
@@ -57,7 +60,7 @@ class AlpacaStreamError(RuntimeError):
 
 
 @dataclass(slots=True)
-class StreamHandle(Generic[EventT]):
+class StreamHandle[EventT]:
     """An active stream's bounded event queue and background task."""
 
     events: asyncio.Queue[EventT]
@@ -84,9 +87,7 @@ class _TerminalFailure:
 async def start_news_stream(
     client: httpx2.AsyncClient,
     *,
-    url: str,
-    api_key: str,
-    api_secret: str,
+    settings: AlpacaSettings,
     stop_event: asyncio.Event,
     on_terminated: Callable[[AlpacaStreamError], None] | None = None,
 ) -> StreamHandle[NewsItem]:
@@ -97,7 +98,16 @@ async def start_news_stream(
     without a callback they are raised by the returned task.
     """
     return await _start_stream(
-        _StreamConfig(client, url, api_key, api_secret, "news", "news", ("*",), _parse_news),
+        _StreamConfig(
+            client,
+            settings.news_stream_url,
+            settings.api_key,
+            settings.api_secret,
+            "news",
+            "news",
+            ("*",),
+            _parse_news,
+        ),
         stop_event,
         on_terminated=on_terminated,
     )
@@ -106,27 +116,32 @@ async def start_news_stream(
 async def start_trade_stream(
     client: httpx2.AsyncClient,
     *,
-    base_url: str,
-    api_key: str,
-    api_secret: str,
+    settings: AlpacaSettings,
     stop_event: asyncio.Event,
     on_terminated: Callable[[AlpacaStreamError], None] | None = None,
 ) -> StreamHandle[Trade]:
     """Start the IEX trades stream and return after its first subscription.
 
-    ``base_url`` is Alpaca's configured stock stream URL, normally ending in
-    ``/v2``. The IEX feed path is appended as the Go SDK does.
+    ``settings.stock_stream_url`` is Alpaca's configured stock stream URL,
+    normally ending in ``/v2``. The IEX feed path is appended as the Go SDK does.
     """
     return await _start_stream(
         _StreamConfig(
-            client, f"{base_url.rstrip('/')}/iex", api_key, api_secret, "trades", "trades", ("SPY", "QQQ"), _parse_trade
+            client,
+            f"{settings.stock_stream_url.rstrip('/')}/iex",
+            settings.api_key,
+            settings.api_secret,
+            "trades",
+            "trades",
+            ("SPY", "QQQ"),
+            _parse_trade,
         ),
         stop_event,
         on_terminated=on_terminated,
     )
 
 
-async def _start_stream(
+async def _start_stream[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     on_terminated: Callable[[AlpacaStreamError], None] | None,
@@ -152,7 +167,7 @@ async def _start_stream(
     return StreamHandle(events=events, task=task)
 
 
-async def _manage_stream(
+async def _manage_stream[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
@@ -188,7 +203,7 @@ async def _manage_stream(
         await asyncio.gather(stop_task, return_exceptions=True)
 
 
-async def _run_stream(
+async def _run_stream[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
@@ -221,12 +236,7 @@ async def _run_stream(
                     return
                 continue
             if isinstance(outcome, _TerminalFailure):
-                if not started.done():
-                    started.set_exception(outcome.error)
-                    return
-                if on_terminated is None:
-                    raise outcome.error
-                on_terminated(outcome.error)
+                _report_terminal_failure(outcome.error, started, on_terminated)
                 return
     except asyncio.CancelledError:
         if not started.done():
@@ -237,7 +247,20 @@ async def _run_stream(
         started.set_exception(AlpacaStreamError(f"Alpaca {config.stream_name} stream stopped before subscription"))
 
 
-async def _read_connection(
+def _report_terminal_failure(
+    error: AlpacaStreamError,
+    started: asyncio.Future[None],
+    on_terminated: Callable[[AlpacaStreamError], None] | None,
+) -> None:
+    if not started.done():
+        started.set_exception(error)
+    elif on_terminated is None:
+        raise error
+    else:
+        on_terminated(error)
+
+
+async def _read_connection[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
@@ -259,14 +282,17 @@ async def _read_connection(
                 if not started.done():
                     started.set_result(None)
                 await _read_events(config, websocket, stop_event, events, pending_messages)
-                return _STOPPED
-            except Exception as error:
+            # Classify all ordinary protocol failures before context exit wraps them.
+            except Exception as error:  # noqa: BLE001
                 return _failure_outcome(config, "stream protocol", error, started.done())
-    except Exception as error:
+            else:
+                return _STOPPED
+    # Context entry and exit can fail with arbitrary ordinary exception groups.
+    except Exception as error:  # noqa: BLE001
         return _failure_outcome(config, "connection", error, started.done())
 
 
-async def _authenticate_and_subscribe(
+async def _authenticate_and_subscribe[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
@@ -282,47 +308,55 @@ async def _authenticate_and_subscribe(
     return pending_messages
 
 
-async def _wait_for_ack(
+async def _wait_for_ack[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
     stage: str,
 ) -> list[dict[str, object]] | None:
     deadline = asyncio.get_running_loop().time() + ACK_TIMEOUT_SECONDS
+    timeout_message = f"Alpaca {config.stream_name} stream timed out waiting for {stage} acknowledgement"
     while not stop_event.is_set():
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
-            raise AlpacaStreamError(f"Alpaca {config.stream_name} stream timed out waiting for {stage} acknowledgement")
+            raise AlpacaStreamError(timeout_message)
         try:
             payload = await websocket.receive_json(timeout=remaining)
         except TimeoutError as error:
-            raise AlpacaStreamError(
-                f"Alpaca {config.stream_name} stream timed out waiting for {stage} acknowledgement"
-            ) from error
+            raise AlpacaStreamError(timeout_message) from error
         messages = _message_objects(payload)
         for index, message in enumerate(messages):
-            message_type = message.get("T")
-            if message_type == "error":
-                raise _server_error(config.stream_name, stage, message, config.api_key, config.api_secret)
-            if stage == "authentication" and message_type == "success":
-                response = message.get("msg")
-                if isinstance(response, str) and response.casefold() == "authenticated":
-                    return messages[:index] + messages[index + 1 :]
-            if stage == "subscription" and message_type == "subscription":
-                subscriptions = message.get("streams")
-                if not isinstance(subscriptions, dict):
-                    subscriptions = message
-                acknowledged = subscriptions.get(config.channel)
-                if isinstance(acknowledged, list) and all(isinstance(symbol, str) for symbol in acknowledged):
-                    if set(config.symbols).issubset(acknowledged):
-                        return messages[:index] + messages[index + 1 :]
-                raise AlpacaStreamError(
-                    f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
-                )
+            if _is_acknowledgement(config, stage, message):
+                return messages[:index] + messages[index + 1 :]
     return None
 
 
-async def _read_events(
+def _is_acknowledgement[EventT](config: _StreamConfig[EventT], stage: str, message: dict[str, object]) -> bool:
+    """Validate a stage acknowledgement, raising for server or subscription errors."""
+    message_type = message.get("T")
+    if message_type == "error":
+        raise _server_error(config.stream_name, stage, message, config.api_key, config.api_secret)
+    if stage == "authentication" and message_type == "success":
+        response = message.get("msg")
+        if isinstance(response, str) and response.casefold() == "authenticated":
+            return True
+    if stage == "subscription" and message_type == "subscription":
+        subscriptions = message.get("streams")
+        if not isinstance(subscriptions, dict):
+            subscriptions = message
+        acknowledged = subscriptions.get(config.channel)
+        if (
+            isinstance(acknowledged, list)
+            and all(isinstance(symbol, str) for symbol in acknowledged)
+            and set(config.symbols).issubset(acknowledged)
+        ):
+            return True
+        detail = f"Alpaca {config.stream_name} stream acknowledged an incomplete {config.channel} subscription"
+        raise AlpacaStreamError(detail)
+    return False
+
+
+async def _read_events[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
@@ -336,7 +370,8 @@ async def _read_events(
             try:
                 payload = await websocket.receive_json(timeout=None)
             except json.JSONDecodeError as error:
-                raise AlpacaStreamError(f"Alpaca {config.stream_name} stream received invalid JSON") from error
+                error_message = f"Alpaca {config.stream_name} stream received invalid JSON"
+                raise AlpacaStreamError(error_message) from error
             messages = _message_objects(payload)
         for message in messages:
             if message.get("T") == "error":
@@ -346,7 +381,7 @@ async def _read_events(
                 await events.put(event)
 
 
-def _failure_outcome(
+def _failure_outcome[EventT](
     config: _StreamConfig[EventT],
     stage: str,
     error: Exception,
@@ -364,9 +399,9 @@ def _is_retryable_transport_error(error: BaseException, established: bool) -> bo
             _is_retryable_transport_error(child, established) for child in error.exceptions
         )
     if isinstance(error, WebSocketDisconnect):
-        return error.code != 1009
+        return error.code != WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE
     if isinstance(error, WebSocketUpgradeError):
-        return established and error.response.status_code >= 500
+        return established and error.response.status_code >= HTTP_SERVER_ERROR_STATUS_CODE
     return isinstance(
         error,
         (
@@ -385,8 +420,9 @@ def _message_objects(payload: object) -> list[dict[str, object]]:
     messages: list[dict[str, object]] = []
     for value in values:
         if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-            raise AlpacaStreamError("Alpaca stream sent a message with an invalid shape")
-        messages.append(cast(dict[str, object], value))
+            message = "Alpaca stream sent a message with an invalid shape"
+            raise AlpacaStreamError(message)
+        messages.append(cast("dict[str, object]", value))
     return messages
 
 
@@ -408,9 +444,11 @@ def _parse_trade(message: dict[str, object]) -> Trade | None:
     price = message.get("p", 0)
     size = message.get("s", 0)
     if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
-        raise AlpacaStreamError("Alpaca trades stream sent an invalid price")
+        error_message = "Alpaca trades stream sent an invalid price"
+        raise AlpacaStreamError(error_message)
     if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= UINT32_MAX:
-        raise AlpacaStreamError("Alpaca trades stream sent an invalid size")
+        error_message = "Alpaca trades stream sent an invalid size"
+        raise AlpacaStreamError(error_message)
     return Trade(
         symbol=_text(message, "S", "trades"),
         price=float(price),
@@ -425,14 +463,16 @@ def _parse_trade(message: dict[str, object]) -> Trade | None:
 def _text(message: dict[str, object], field: str, stream_name: str) -> str:
     value = message.get(field, "")
     if not isinstance(value, str):
-        raise AlpacaStreamError(f"Alpaca {stream_name} stream sent an invalid {field} field")
+        error_message = f"Alpaca {stream_name} stream sent an invalid {field} field"
+        raise AlpacaStreamError(error_message)
     return value
 
 
 def _text_tuple(message: dict[str, object], field: str, stream_name: str) -> tuple[str, ...]:
     value = message.get(field, [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise AlpacaStreamError(f"Alpaca {stream_name} stream sent an invalid {field} field")
+        error_message = f"Alpaca {stream_name} stream sent an invalid {field} field"
+        raise AlpacaStreamError(error_message)
     return tuple(value)
 
 
@@ -463,7 +503,7 @@ def _stream_failure(
     if isinstance(error, WebSocketUpgradeError):
         detail = f"WebSocket upgrade rejected with HTTP {error.response.status_code}"
     elif isinstance(error, WebSocketDisconnect):
-        if error.code == 1009:
+        if error.code == WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE:
             detail = f"WebSocket message exceeded the configured maximum size (code {error.code})"
         else:
             reason = _redact(error.reason, api_key, api_secret)

@@ -1,9 +1,12 @@
+"""Tests for application configuration and CSV parsing."""
+
 import pytest
 
 from stocknews.config import csv_values, load_config
 
 
 def test_config_applies_defaults_and_parses_csv_values() -> None:
+    """Apply default settings and parse configured comma-separated values."""
     settings = load_config(
         {
             "ALPACA_API_KEY": "key",
@@ -26,12 +29,14 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
 
 
 def test_config_defaults_to_original_blocked_phrases() -> None:
+    """Use the built-in blocked phrases when none are configured."""
     settings = load_config({"ALPACA_API_KEY": "key", "ALPACA_API_SECRET": "secret"})
 
     assert settings.blocked_phrases == ("if you invested", "you would have", "would be worth")
 
 
 def test_config_preserves_explicitly_empty_optional_values() -> None:
+    """Preserve empty optional settings instead of replacing them with defaults."""
     settings = load_config(
         {
             "ALPACA_API_KEY": " key ",
@@ -62,9 +67,11 @@ def test_config_preserves_explicitly_empty_optional_values() -> None:
     ],
 )
 def test_config_requires_nonblank_credentials(name: str, environ: dict[str, str]) -> None:
+    """Reject missing or whitespace-only Alpaca credentials."""
     with pytest.raises(ValueError, match="is required"):
         load_config(environ)
 
 
 def test_csv_values_trims_values_and_removes_empty_entries() -> None:
+    """Trim CSV entries and discard empty values."""
     assert csv_values("spam, scam,, legit ") == ("spam", "scam", "legit")
