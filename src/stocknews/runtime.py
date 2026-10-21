@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     import httpx2
 
-    from stocknews.models import Config, NewsItem
+    from stocknews.models import Config, NewsItem, Trade
 
 DELIVERY_QUEUE_CAPACITY = 16
 
@@ -47,8 +47,11 @@ _STREAM_ENDED = _StreamEnded()
 class _RunState:
     jobs: asyncio.Queue[_Delivery | None]
     worker: asyncio.Task[None] | None = None
+    stock_connection: asyncio.Task[AsyncIterable[Trade]] | None = None
     news_iterator: AsyncIterator[NewsItem] | None = None
+    stock_iterator: AsyncIterator[Trade] | None = None
     news_read: asyncio.Task[NewsItem | _StreamEnded] | None = None
+    stock_read: asyncio.Task[Trade | _StreamEnded] | None = None
     worker_cancelled: bool = False
 
     def cancel_worker(self) -> None:
@@ -160,17 +163,38 @@ async def _close_iterator[T](stream: AsyncIterator[T]) -> None:
         await cast("Awaitable[None]", close())
 
 
-def _process_news_read(state: _RunState, config: Config, logger: logging.Logger) -> bool:
-    """Handle the completed news read and start the next one.
+def _accept_stock_connection(state: _RunState, completed: set[asyncio.Task[object]], logger: logging.Logger) -> None:
+    if state.stock_connection is None or cast("asyncio.Task[object]", state.stock_connection) not in completed:
+        return
 
-    The caller must ensure ``state.news_read`` is set and has completed.
+    connection = state.stock_connection
+    state.stock_connection = None
+    if connection.cancelled():
+        connection.result()
+    connection_error = connection.exception()
+    if isinstance(connection_error, Exception):
+        logger.warning(
+            "failed to connect Alpaca stock stream",
+            extra={"error": str(connection_error)},
+        )
+        return
 
-    Returns:
-        True when the news stream ended normally, otherwise False.
-    """
-    news_read = cast("asyncio.Task[NewsItem | _StreamEnded]", state.news_read)
+    connected_stock = connection.result()
+    state.stock_iterator = aiter(connected_stock)
+    state.stock_read = asyncio.create_task(_next(state.stock_iterator))
+
+
+def _process_news_read(
+    state: _RunState,
+    completed: set[asyncio.Task[object]],
+    config: Config,
+    logger: logging.Logger,
+) -> bool:
+    if state.news_read is None or cast("asyncio.Task[object]", state.news_read) not in completed:
+        return False
+
     try:
-        message = news_read.result()
+        message = state.news_read.result()
     except Exception as error:
         error_message = f"alpaca news stream terminated: {error}"
         raise RuntimeError(error_message) from error
@@ -191,23 +215,68 @@ def _process_news_read(state: _RunState, config: Config, logger: logging.Logger)
     return False
 
 
+def _process_stock_read(
+    state: _RunState,
+    completed: set[asyncio.Task[object]],
+    logger: logging.Logger,
+) -> bool:
+    if state.stock_read is None or cast("asyncio.Task[object]", state.stock_read) not in completed:
+        return False
+
+    try:
+        trade_message = state.stock_read.result()
+    except Exception as error:
+        error_message = f"alpaca stock stream terminated: {error}"
+        raise RuntimeError(error_message) from error
+    if isinstance(trade_message, _StreamEnded):
+        return True
+
+    logger.info(
+        "stock trade",
+        extra={
+            "symbol": trade_message.symbol,
+            "price": trade_message.price,
+            "size": trade_message.size,
+            "exchange": trade_message.exchange,
+            "timestamp": trade_message.timestamp,
+            "conditions": trade_message.conditions,
+            "tape": trade_message.tape,
+        },
+    )
+    if state.stock_iterator is None:
+        error_message = "stock stream read completed without an active iterator"
+        raise RuntimeError(error_message)
+    state.stock_read = asyncio.create_task(_next(state.stock_iterator))
+    return False
+
+
 async def _pump_streams(state: _RunState, config: Config, logger: logging.Logger) -> None:
     while True:
         if state.news_read is None:
             error_message = "news stream read task is unavailable while pumping streams"
             raise RuntimeError(error_message)
         waiting: set[asyncio.Task[object]] = {cast("asyncio.Task[object]", state.news_read)}
-        # Only one task is awaited, so the completed set is implied.
-        await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        if state.stock_read is not None:
+            waiting.add(cast("asyncio.Task[object]", state.stock_read))
+        if state.stock_connection is not None:
+            waiting.add(cast("asyncio.Task[object]", state.stock_connection))
+        completed, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
 
-        if _process_news_read(state, config, logger):
+        _accept_stock_connection(state, completed, logger)
+        if _process_news_read(state, completed, config, logger):
+            return
+        if _process_stock_read(state, completed, logger):
             return
 
 
 async def _close_streams(state: _RunState, logger: logging.Logger) -> bool:
     pending_tasks = [
         (stream_name, cast("asyncio.Task[object]", task))
-        for stream_name, task in (("news", state.news_read),)
+        for stream_name, task in (
+            ("news", state.news_read),
+            ("stock", state.stock_read),
+            ("stock", state.stock_connection),
+        )
         if task is not None
     ]
     cancelled_tasks: set[asyncio.Task[object]] = set()
@@ -228,7 +297,7 @@ async def _close_streams(state: _RunState, logger: logging.Logger) -> bool:
 
     iterator_close_tasks = [
         (stream_name, asyncio.create_task(_close_iterator(iterator)))
-        for stream_name, iterator in (("news", state.news_iterator),)
+        for stream_name, iterator in (("news", state.news_iterator), ("stock", state.stock_iterator))
         if iterator is not None
     ]
     for stream_name, task in iterator_close_tasks:
@@ -276,15 +345,24 @@ async def run(
     client: httpx2.AsyncClient,
     logger: logging.Logger,
     news_stream: StreamFactory[NewsItem],
+    stock_stream: StreamFactory[Trade] | None = None,
 ) -> None:
-    """Run the news stream factory and drain Discord jobs on normal shutdown.
+    """Run connected stream factories and drain Discord jobs on normal shutdown.
 
-    The stream factory connects and returns an async iterable. Exceptions raised
-    by the factory indicate a connection error; iteration errors indicate an
+    A stream factory connects and returns an async iterable. Exceptions raised by
+    a stream factory indicate a connection error; iteration errors indicate an
     established stream failure.
     """
     state = _RunState(asyncio.Queue(maxsize=DELIVERY_QUEUE_CAPACITY))
     normal_completion = False
+
+    if stock_stream is not None:
+        stock_factory = stock_stream
+
+        async def connect_stock() -> AsyncIterable[Trade]:
+            return await stock_factory()
+
+        state.stock_connection = asyncio.create_task(connect_stock())
 
     try:
         try:
