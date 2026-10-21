@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Real-time Python service that reads Alpaca news and stock streams, filters
+Real-time Python service that reads the Alpaca news stream, filters
 Benzinga Newsdesk items, and sends Discord webhook embeds.
 
 ## Start here
@@ -22,8 +22,7 @@ Read only what you need:
 ## Conventions
 
 - `ALPACA_API_KEY` and `ALPACA_API_SECRET` are required. Optional settings are
-  `ALPACA_NEWS_STREAM_URL`, `ALPACA_STOCK_STREAM_URL`,
-  `DISCORD_ANALYST_WEBHOOKS`, `DISCORD_EARNINGS_WEBHOOKS`,
+  `ALPACA_NEWS_STREAM_URL`, `DISCORD_ANALYST_WEBHOOKS`, `DISCORD_EARNINGS_WEBHOOKS`,
   `DISCORD_NEWS_WEBHOOKS`, `STOCK_LOGO`, `TRANSPARENT_PNG`, and
   `BLOCKED_PHRASES`. Discord webhook lists and blocked phrases are
   comma-separated.
@@ -33,7 +32,7 @@ Read only what you need:
 - Keep subprocess coverage enabled so CLI signal tests count toward coverage.
 - Keep Python dependencies and the lockfile managed by uv. Use `uv sync --locked`.
 - Keep both combined statement-and-branch coverage and branch-only coverage at 95% or higher.
-- Preserve Benzinga Newsdesk filtering, earnings/analyst/general routing, IEX SPY/QQQ logs, and bounded worker behavior.
+- Preserve Benzinga Newsdesk filtering, earnings/analyst/general routing, and bounded worker behavior.
 - Container builds use the pinned UBI 9 Python 3.14 image and install locked runtime dependencies only. The runtime must remain non-root.
 - Keep action versions pinned to commit SHAs.
 - Do not reintroduce the legacy Go runtime or tooling.
