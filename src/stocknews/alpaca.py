@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -16,7 +15,7 @@ from httpx2.websockets import (
     WebSocketUpgradeError,
 )
 
-from .models import NewsItem, Trade
+from .models import NewsItem
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,7 +28,6 @@ __all__ = [
     "AlpacaStreamError",
     "StreamHandle",
     "start_news_stream",
-    "start_trade_stream",
 ]
 
 QUEUE_CAPACITY = 256
@@ -107,34 +105,6 @@ async def start_news_stream(
             "news",
             ("*",),
             _parse_news,
-        ),
-        stop_event,
-        on_terminated=on_terminated,
-    )
-
-
-async def start_trade_stream(
-    client: httpx2.AsyncClient,
-    *,
-    settings: AlpacaSettings,
-    stop_event: asyncio.Event,
-    on_terminated: Callable[[AlpacaStreamError], None] | None = None,
-) -> StreamHandle[Trade]:
-    """Start the IEX trades stream and return after its first subscription.
-
-    ``settings.stock_stream_url`` is Alpaca's configured stock stream URL,
-    normally ending in ``/v2``. The IEX feed path is appended as the Go SDK does.
-    """
-    return await _start_stream(
-        _StreamConfig(
-            client,
-            f"{settings.stock_stream_url.rstrip('/')}/iex",
-            settings.api_key,
-            settings.api_secret,
-            "trades",
-            "trades",
-            ("SPY", "QQQ"),
-            _parse_trade,
         ),
         stop_event,
         on_terminated=on_terminated,
@@ -435,28 +405,6 @@ def _parse_news(message: dict[str, object]) -> NewsItem | None:
         headline=_text(message, "headline", "news"),
         summary=_text(message, "summary", "news"),
         url=_text(message, "url", "news"),
-    )
-
-
-def _parse_trade(message: dict[str, object]) -> Trade | None:
-    if message.get("T") != "t":
-        return None
-    price = message.get("p", 0)
-    size = message.get("s", 0)
-    if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
-        error_message = "Alpaca trades stream sent an invalid price"
-        raise AlpacaStreamError(error_message)
-    if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= UINT32_MAX:
-        error_message = "Alpaca trades stream sent an invalid size"
-        raise AlpacaStreamError(error_message)
-    return Trade(
-        symbol=_text(message, "S", "trades"),
-        price=float(price),
-        size=float(size),
-        exchange=_text(message, "x", "trades"),
-        timestamp=_text(message, "t", "trades"),
-        conditions=_text_tuple(message, "c", "trades"),
-        tape=_text(message, "z", "trades"),
     )
 
 
