@@ -439,9 +439,17 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
 
             return events()
 
+        output = StringIO()
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            await run(_config(), client, _logger(StringIO()), connect_news)
+            await run(_config(), client, _logger(output), connect_news)
 
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        sent_logs = [
+            (record["kind"], record["symbol"], record["webhooks"])
+            for record in records
+            if record["msg"] == "sent Discord webhook"
+        ]
+        assert sent_logs == [("earnings", "AAPL", 1), ("analyst", "AAPL", 1), ("news", "AAPL", 1)]
         assert sent == {
             "/earnings": {
                 "embeds": [
@@ -695,6 +703,7 @@ def test_webhook_fanout_continues_after_failure() -> None:
         failure_logs = [record for record in records if record["msg"] == "failed to send Discord webhook"]
         assert len(failure_logs) == expected_news_item_count
         assert all(record["error"] == "post webhook: unexpected status 503" for record in failure_logs)
+        assert not [record for record in records if record["msg"] == "sent Discord webhook"]
         assert failed_webhook not in log_output
         assert "secret-fail" not in log_output
 
