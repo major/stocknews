@@ -124,6 +124,12 @@ async def _deliver(
                     "failed to send Discord webhook",
                     extra={"error": str(error), "kind": job.kind, "symbol": job.symbol},
                 )
+            else:
+                # Log only the count so webhook URLs and tokens never reach the logs.
+                logger.info(
+                    "sent Discord webhook",
+                    extra={"kind": job.kind, "symbol": job.symbol, "webhooks": len(job.webhooks)},
+                )
         finally:
             jobs.task_done()
 
