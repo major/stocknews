@@ -22,11 +22,10 @@ service.
 | `DISCORD_NEWS_ENABLED` | No | `true` | Enable general news headline alerts with optional summary and link |
 | `STOCK_LOGO` | No | `https://static.stocktitan.net/company-logo/%s.webp` | Stock logo URL template (`%s` = ticker) |
 | `TRANSPARENT_PNG` | No | `https://major.io/transparent.png` | Transparent PNG URL for Discord embed thumbnails |
-| `BLOCKED_PHRASES` | No | `if you invested,you would have,would be worth` | Comma-separated phrases to suppress |
 
 Set configuration in the environment or in `.env` when using Compose. The two
-Alpaca credentials are required. Webhook lists and blocked phrases are
-comma-separated; empty entries are ignored.
+Alpaca credentials are required. Webhook lists are comma-separated; empty entries
+are ignored.
 
 The three `DISCORD_*_ENABLED` settings accept `true`/`false`, `1`/`0`,
 `yes`/`no`, or `on`/`off`, case-insensitive and with surrounding whitespace
@@ -45,9 +44,14 @@ not route those items to general news. Earnings alerts compare EPS and sales
 actuals with estimates. Analyst alerts cover ratings and price targets, except
 announced or maintained price targets are suppressed. General news includes a
 headline and may include a summary and link. All categories filter for
-Benzinga Newsdesk items with a single eligible symbol. Webhooks are still
-required to send alerts, and empty webhook lists send nothing. Setting changes
-take effect after restarting the service.
+Benzinga Newsdesk items. Symbols are trimmed, and blank or colon-qualified
+symbols are removed. Items with no symbols are allowed; items with only
+colon-qualified symbols are skipped. Mixed lists keep their US-style tickers.
+This colon-based check does not verify exchange listings. Embeds use the first
+retained ticker, or no ticker prefix and a transparent thumbnail for tickerless
+news. Headlines are not blocked by phrase. Webhooks are still required to send
+alerts, and empty webhook lists send nothing. Setting changes take effect after
+restarting the service.
 
 `ALPACA_STOCK_STREAM_URL` is no longer used and is ignored. SPY and QQQ remain
 valid news tickers, and stock logo behavior is unchanged.

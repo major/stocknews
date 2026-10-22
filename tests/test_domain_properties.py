@@ -1,35 +1,38 @@
-"""Property tests for news precedence and earnings extraction."""
+"""Property tests for ticker eligibility and earnings extraction."""
 
-from string import ascii_lowercase
+from string import ascii_uppercase
 
 from hypothesis import given
 from hypothesis import strategies as st
 
 from stocknews.earnings import extract_earnings
 from stocknews.models import NewsItem
-from stocknews.news import classify_news
+from stocknews.news import classify_news, us_symbols
 
 
 @given(
-    blocked_phrase=st.text(alphabet=ascii_lowercase, min_size=1, max_size=20),
-    rejection=st.sampled_from(("symbol_count", "empty_symbol", "non_us_exchange", "unapproved_author")),
+    us_tickers=st.lists(
+        st.text(alphabet=ascii_uppercase, min_size=1, max_size=6),
+        min_size=1,
+        max_size=8,
+    ),
 )
-def test_html_entities_and_case_do_not_override_blocked_phrase_precedence(
-    blocked_phrase: str,
-    rejection: str,
+def test_us_symbol_normalization_preserves_us_tickers_with_ineligible_entries(
+    us_tickers: list[str],
 ) -> None:
-    """Keep blocked-phrase rejection first after entity decoding and case folding."""
-    encoded_headline = "".join(f"&#{ord(character)};" for character in blocked_phrase)
-    rejection_fields = {
-        "symbol_count": ((), "Someone else"),
-        "empty_symbol": ((" ",), "Someone else"),
-        "non_us_exchange": (("TSX:ACME",), "Someone else"),
-        "unapproved_author": (("ACME",), "Someone else"),
-    }
-    symbols, author = rejection_fields[rejection]
-    item = NewsItem(symbols=symbols, author=author, headline=encoded_headline)
+    """Preserve US tickers through normalization amid blanks and foreign symbols."""
+    original_symbols = tuple(us_tickers)
+    mixed_symbols: list[str] = []
+    for ticker in original_symbols:
+        mixed_symbols.extend(("  ", f" TSX:{ticker} ", ticker, "\t"))
 
-    assert classify_news(item, (blocked_phrase.upper(),)) == "blocked_phrase"
+    original_item = NewsItem(symbols=original_symbols, author="Benzinga Newsdesk", headline="headline")
+    mixed_item = NewsItem(symbols=tuple(mixed_symbols), author="Benzinga Newsdesk", headline="headline")
+    normalized_symbols = us_symbols(mixed_symbols)
+
+    assert normalized_symbols == original_symbols
+    assert us_symbols(normalized_symbols) == normalized_symbols
+    assert classify_news(mixed_item) == classify_news(original_item) == "news"
 
 
 def _money_amount(units: tuple[str, ...]) -> st.SearchStrategy[str]:

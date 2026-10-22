@@ -2,10 +2,6 @@
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 _EARNINGS_NEWS_RE = re.compile(
     r"(EPS|Sales) (~*\$[\d\.\(\)\-\$\~]+[KMB]*) [\w\s]+ (\$[\d\.\(\)\-\$\~]+[KMB]*)",
@@ -73,9 +69,3 @@ def describe_earnings(headline: str) -> str:
         for kind, result in extract_earnings(headline).items()
     ]
     return "\n".join(sorted(lines))
-
-
-def has_blocked_phrases(headline: str, blocked_phrases: Sequence[str]) -> bool:
-    """Return whether the headline contains a blocked phrase, ignoring case."""
-    headline_lower = headline.lower()
-    return any(phrase.lower() in headline_lower for phrase in blocked_phrases)

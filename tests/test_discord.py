@@ -54,6 +54,38 @@ def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
     assert earnings_payload("AAPL", "Apple launches a product", STOCK_LOGO, TRANSPARENT_PNG) is None
 
 
+def test_earnings_payload_uses_company_name_without_symbol() -> None:
+    """Build an earnings embed without a ticker prefix when no symbol is retained."""
+    payload = earnings_payload(
+        "",
+        "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+        STOCK_LOGO,
+        TRANSPARENT_PNG,
+    )
+
+    assert payload == {
+        "embeds": [
+            {
+                "title": "Apple",
+                "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                "image": {"url": TRANSPARENT_PNG},
+                "thumbnail": {"url": TRANSPARENT_PNG},
+            }
+        ]
+    }
+
+
+def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
+    """Keep a tickerless earnings title nonempty when no company marker is present."""
+    headline = "EPS $2.00 beat $1.80 Estimate"
+
+    payload = earnings_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert payload["embeds"][0]["title"] == headline
+    assert payload["embeds"][0]["thumbnail"] == {"url": TRANSPARENT_PNG}
+
+
 @pytest.mark.parametrize(
     ("headline", "title", "color"),
     [
@@ -132,6 +164,25 @@ def test_analyst_payload_omits_empty_headline_description() -> None:
     assert "description" not in payload["embeds"][0]
 
 
+def test_analyst_payload_uses_report_details_without_symbol() -> None:
+    """Keep the analyst action marker and report details without a ticker prefix."""
+    headline = "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135"
+
+    payload = analyst_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload == {
+        "embeds": [
+            {
+                "title": "💔 Amazon $135.00",
+                "description": headline,
+                "color": 0xD42020,
+                "image": {"url": TRANSPARENT_PNG},
+                "thumbnail": {"url": TRANSPARENT_PNG},
+            }
+        ]
+    }
+
+
 def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> None:
     """Use the first symbol and omit empty news fields from the embed."""
     item = NewsItem(
@@ -172,14 +223,19 @@ def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> Non
             }
         ]
     }
-    assert (
-        news_payload(
-            NewsItem(symbols=(), author="", headline="No symbol", summary="", url=""),
-            STOCK_LOGO,
-            TRANSPARENT_PNG,
-        )
-        is None
-    )
+    assert news_payload(
+        NewsItem(symbols=(), author="", headline="No symbol", summary="", url=""),
+        STOCK_LOGO,
+        TRANSPARENT_PNG,
+    ) == {
+        "embeds": [
+            {
+                "title": "No symbol",
+                "image": {"url": TRANSPARENT_PNG},
+                "thumbnail": {"url": TRANSPARENT_PNG},
+            }
+        ]
+    }
 
 
 def test_send_payload_posts_json_sequentially_and_accepts_all_2xx() -> None:

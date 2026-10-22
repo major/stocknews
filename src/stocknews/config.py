@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 _DEFAULT_NEWS_STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
 _DEFAULT_STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _DEFAULT_TRANSPARENT_PNG = "https://major.io/transparent.png"
-_DEFAULT_BLOCKED_PHRASES = "if you invested,you would have,would be worth"
 
 
 def csv_values(value: str) -> tuple[str, ...]:
@@ -34,7 +33,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
         discord_news_enabled=_boolean_env(environ, "DISCORD_NEWS_ENABLED"),
         stock_logo=environ.get("STOCK_LOGO", _DEFAULT_STOCK_LOGO),
         transparent_png=environ.get("TRANSPARENT_PNG", _DEFAULT_TRANSPARENT_PNG),
-        blocked_phrases=csv_values(environ.get("BLOCKED_PHRASES", _DEFAULT_BLOCKED_PHRASES)),
     )
 
 
