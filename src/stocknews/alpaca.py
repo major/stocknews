@@ -362,6 +362,7 @@ async def _wait_for_ack[EventT](
         except TimeoutError as error:
             raise AlpacaStreamError(timeout_message) from error
         messages = _message_objects(payload)
+        _log_received_messages(config, messages, stage)
         for index, message in enumerate(messages):
             if _is_acknowledgement(config, stage, message):
                 return messages[:index] + messages[index + 1 :]
@@ -410,6 +411,7 @@ async def _read_events[EventT](
                 error_message = f"Alpaca {config.stream_name} stream received invalid JSON"
                 raise AlpacaStreamError(error_message) from error
             messages = _message_objects(payload)
+            _log_received_messages(config, messages, "stream")
         for message in messages:
             if message.get("T") == "error":
                 raise _server_error(config.stream_name, "stream", message, config.api_key, config.api_secret)
@@ -461,6 +463,35 @@ def _message_objects(payload: object) -> list[dict[str, object]]:
             raise AlpacaStreamError(message)
         messages.append(cast("dict[str, object]", value))
     return messages
+
+
+def _log_received_messages[EventT](
+    config: _StreamConfig[EventT], messages: list[dict[str, object]], stage: str
+) -> None:
+    """Log bounded, credential-safe metadata for decoded messages before parsing them."""
+    for message in messages:
+        message_type = message.get("T")
+        article_id = message.get("id")
+        source = message.get("source")
+        author = message.get("author")
+        logger.info(
+            "received Alpaca stream message",
+            extra={
+                "stream": config.stream_name,
+                "stage": stage,
+                "message_type": _safe_message_text(message_type, config.api_key, config.api_secret),
+                "article_id": article_id if isinstance(article_id, int) and not isinstance(article_id, bool) else None,
+                "source": _safe_message_text(source, config.api_key, config.api_secret),
+                "author": _safe_message_text(author, config.api_key, config.api_secret),
+            },
+        )
+
+
+def _safe_message_text(value: object, api_key: str, api_secret: str) -> str:
+    """Return redacted, bounded text metadata or an empty string for non-text values."""
+    if not isinstance(value, str):
+        return ""
+    return _redact(value, api_key, api_secret)[:64]
 
 
 def _parse_news(message: dict[str, object]) -> NewsItem | None:
