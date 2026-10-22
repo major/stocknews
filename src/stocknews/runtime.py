@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from stocknews.models import Config, NewsItem
 
 DELIVERY_QUEUE_CAPACITY = 16
+RECEIPT_CONTENT_CHARACTER_LIMIT = 250
 
 type StreamFactory[T] = Callable[[], Awaitable[AsyncIterable[T]]]
 
@@ -202,6 +203,19 @@ def _process_news_read(
     if isinstance(message, _StreamEnded):
         return True
 
+    # Log every received item before filtering so skips always have a receipt record.
+    # Content is capped by characters to keep long bodies out of the logs.
+    logger.info(
+        "received news item",
+        extra={
+            "headline": message.headline,
+            "summary": message.summary,
+            "source": message.source,
+            "content": message.content[:RECEIPT_CONTENT_CHARACTER_LIMIT],
+            "url": message.url,
+            "symbols": message.symbols,
+        },
+    )
     delivery = _make_delivery(message, config, logger)
     if delivery is not None:
         try:

@@ -404,6 +404,8 @@ def _parse_news(message: dict[str, object]) -> NewsItem | None:
         headline=_text(message, "headline", "news"),
         summary=_text(message, "summary", "news"),
         url=_text(message, "url", "news"),
+        source=_text(message, "source", "news"),
+        content=_text(message, "content", "news"),
     )
 
 

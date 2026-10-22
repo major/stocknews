@@ -12,6 +12,8 @@ class NewsItem:
     headline: str
     summary: str = ""
     url: str = ""
+    source: str = ""
+    content: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
