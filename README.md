@@ -1,6 +1,6 @@
 # stocknews
 
-stocknews is a Python 3.14 service that reads the Alpaca news stream and sends
+stocknews is a Python 3.15 service that reads the Alpaca news stream and sends
 relevant alerts to Discord. It filters for Benzinga Newsdesk items and routes
 qualifying headlines to earnings, analyst, or general news webhooks.
 
@@ -58,6 +58,8 @@ valid news tickers, and stock logo behavior is unchanged.
 
 ## Run locally
 
+Install uv 0.13.5 first. The project selects Python 3.15.1.
+
 ```bash
 uv sync --locked
 uv run stocknews
@@ -76,8 +78,9 @@ GIT_SHA=$(git rev-parse HEAD) uv run stocknews
 podman compose up --build
 ```
 
-The container uses a pinned UBI 9 Python 3.14 image, installs the locked runtime
-dependencies only, and runs as a non-root user.
+The container uses a digest-pinned official Python 3.15.1 slim image on Debian
+Trixie, installs the locked runtime dependencies only, and runs as non-root UID
+1001.
 For a manual build with the current commit in the startup banner, pass the SHA
 as a build argument:
 
@@ -92,6 +95,27 @@ podman build --build-arg GIT_SHA="$(git rev-parse HEAD)" -t stocknews .
 - `make coverage` requires at least 95% combined statement-and-branch coverage and 95% branch-only coverage.
 - `make test` runs the test suite.
 - `make audit` checks dependencies with `pip-audit`.
+
+## Python 3.15
+
+See [What's New in Python 3.15](https://docs.python.org/3.15/whatsnew/3.15.html).
+
+- The empty EOF marker dataclass is replaced by the built-in sentinel.
+- UTF-8 is the default, and explicit encodings are retained.
+- No compelling `frozendict` or unpacking sites were found. Lazy imports are
+  unnecessary for imports used on every run.
+- `TaskGroup.cancel()` was not adopted because preserving tested cancellation
+  and draining behavior needs a separate refactor.
+
+The new sampling profiler can inspect asyncio tasks without application changes.
+For a local service process, replace `PID` with its process ID:
+
+```bash
+uv run --locked python -m profiling.sampling attach --async-aware --async-mode all -d 10 PID
+```
+
+Attaching requires OS permission to inspect the target process. Containers may
+need additional permissions; do not weaken production isolation just to profile.
 
 ## Mutation pilot
 

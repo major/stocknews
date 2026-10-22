@@ -27,7 +27,7 @@ jobs:
 
       - name: Install uv and sync locked environment
         run: |
-          python3 -m pip install --user --disable-pip-version-check "uv==0.12.18"
+          python3 -m pip install --user --disable-pip-version-check "uv==0.13.5"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
           export PATH="$(python3 -m site --user-base)/bin:$PATH"
           uv python install
