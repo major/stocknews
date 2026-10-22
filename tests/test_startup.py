@@ -18,9 +18,9 @@ import httpx2
 import pytest
 from httpx2.websockets import ASGIWebSocketTransport
 
-from stocknews.__main__ import _cancel_and_wait, main, run_application
+from stocknews.__main__ import _cancel_and_wait, _stream_events, main, run_application
 from stocknews.alpaca import AlpacaStreamError, StreamHandle
-from stocknews.models import AlpacaSettings, Config, Trade
+from stocknews.models import AlpacaSettings, Config, NewsItem, Trade
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -84,6 +84,21 @@ class _ObservedTradeQueue(asyncio.Queue[Trade]):
     async def get(self) -> Trade:
         """Mark the consumer as waiting before reading the next trade."""
         self.consumer_waiting.set()
+        return await super().get()
+
+
+class _ObservedNewsQueue(asyncio.Queue[NewsItem]):
+    """Signal when the news reader starts waiting for an item."""
+
+    def __init__(self, maxsize: int) -> None:
+        """Initialize the bounded queue and its consumer-waiting event."""
+        super().__init__(maxsize=maxsize)
+        self.consumer_waiting = asyncio.Event()
+
+    async def get(self) -> NewsItem:
+        """Mark the consumer as waiting before reading the next news item."""
+        if self.empty():
+            self.consumer_waiting.set()
         return await super().get()
 
 
@@ -936,6 +951,87 @@ def test_cancel_and_wait_preserves_mixed_base_exception_group() -> None:
         assert error.value.exceptions[0] is ordinary_error
         assert isinstance(error.value.exceptions[1], asyncio.CancelledError)
         assert task.exception() is mixed_errors[0]
+
+    asyncio.run(scenario())
+
+
+class _StreamEventsEofScenario:
+    """Coordinate queue and task timing for news-stream EOF cases."""
+
+    def __init__(self, completion_case: str) -> None:
+        """Create the bounded event queue and stream completion signals."""
+        self.completion_case = completion_case
+        self.events = _ObservedNewsQueue(maxsize=1)
+        self.terminated = asyncio.get_running_loop().create_future()
+        self.finish_stream = asyncio.Event()
+        self.news_item = NewsItem(
+            symbols=("AAPL",),
+            author="Benzinga Newsdesk",
+            headline="Apple launches a phone",
+        )
+
+    async def stream_task(self) -> None:
+        """Keep the stream open until the test releases its completion."""
+        if self.completion_case != "completed-with-buffered-news":
+            await self.finish_stream.wait()
+
+    def queue_final_news(self, task: asyncio.Task[None]) -> None:
+        """Queue the final item after stream completion but before the reader resumes."""
+        assert task.done()
+        self.events.put_nowait(self.news_item)
+
+    async def collect_news(self, task: asyncio.Task[None]) -> list[NewsItem]:
+        """Collect news events until the stream task reports EOF."""
+        stream = StreamHandle(events=self.events, task=task)
+        return [event async for event in _stream_events(stream, self.terminated)]
+
+    async def run(self) -> None:
+        """Run the selected completion ordering and verify cleanup."""
+        task_baseline = asyncio.all_tasks()
+        if self.completion_case == "completed-with-buffered-news":
+            self.events.put_nowait(self.news_item)
+
+        task = asyncio.create_task(self.stream_task())
+        if self.completion_case == "completed-with-buffered-news":
+            await task
+        consumer = asyncio.create_task(self.collect_news(task))
+        try:
+            if self.completion_case != "completed-with-buffered-news":
+                await asyncio.wait_for(self.events.consumer_waiting.wait(), timeout=2)
+                if self.completion_case == "final-news-races-completion":
+                    # Register after the reader's completion callback to keep its queue get pending.
+                    task.add_done_callback(self.queue_final_news)
+                self.finish_stream.set()
+
+            received = await asyncio.wait_for(consumer, timeout=2)
+            await asyncio.wait_for(task, timeout=2)
+
+            expected_news = [] if self.completion_case == "pending-with-empty-queue" else [self.news_item]
+            assert self.events.maxsize == 1
+            assert received == expected_news
+            assert self.events.empty()
+            assert not self.terminated.done()
+            pending_tasks = asyncio.all_tasks() - task_baseline
+            assert not pending_tasks, f"pending tasks after news EOF: {pending_tasks!r}"
+        finally:
+            self.finish_stream.set()
+            for pending_task in (consumer, task):
+                if not pending_task.done():
+                    pending_task.cancel()
+            await asyncio.gather(consumer, task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    "completion_case",
+    ["completed-with-buffered-news", "pending-with-empty-queue", "final-news-races-completion"],
+    ids=["precompleted-buffer", "eof-while-consumer-waits", "final-item-races-eof"],
+)
+def test_stream_events_delivers_buffered_news_before_eof(completion_case: str) -> None:
+    """Verify queued news is delivered before EOF across stream-task races."""
+
+    async def scenario() -> None:
+        """Run the stream EOF case on an active event loop."""
+        await _StreamEventsEofScenario(completion_case).run()
 
     asyncio.run(scenario())
 

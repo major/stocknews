@@ -1344,49 +1344,102 @@ def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
     """Verify normal EOF reports iterator cleanup errors without credentials."""
 
     async def scenario() -> None:
-        stock_connected = asyncio.Event()
-        stock_closed = asyncio.Event()
+        """Run a news-only stream through normal EOF and iterator cleanup."""
         cleanup_error_message = "private stream credential"
 
         class NewsStream:
+            """End normally while reporting a separate cleanup failure."""
+
             def __aiter__(self) -> AsyncIterator[NewsItem]:
+                """Return this news stream as its iterator."""
                 return self
 
             async def __anext__(self) -> NewsItem:
+                """Report normal EOF without yielding an item."""
                 raise StopAsyncIteration
 
             async def aclose(self) -> None:
+                """Raise a secret-bearing cleanup error for sanitization checks."""
                 raise OSError(cleanup_error_message)
 
-        class StockStream:
-            def __aiter__(self) -> AsyncIterator[Trade]:
-                return self
-
-            async def __anext__(self) -> Trade:
-                await asyncio.Event().wait()
-                raise StopAsyncIteration
-
-            async def aclose(self) -> None:
-                stock_closed.set()
-
         async def connect_news() -> AsyncIterable[NewsItem]:
-            await stock_connected.wait()
+            """Return the news stream used to exercise normal EOF cleanup."""
             return NewsStream()
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            stock_connected.set()
-            return StockStream()
 
         output = StringIO()
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _request: httpx2.Response(204))) as client:
-            await run(_config(), client, _logger(output), connect_news, connect_stock)
+            await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
         close_failure = next(record for record in records if record["msg"] == "failed to close Alpaca news stream")
         assert close_failure["error"] == "OSError"
         assert close_failure["stream"] == "news"
         assert cleanup_error_message not in output.getvalue()
-        assert stock_closed.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_reports_sanitized_pending_news_read_failure() -> None:
+    """Verify pending news-read cleanup failures are logged without hiding cancellation."""
+
+    async def scenario() -> None:
+        """Cancel a news reader while its async generator is suspended."""
+        read_waiting = asyncio.Event()
+        iterator_cleaned = asyncio.Event()
+        never_release = asyncio.Event()
+        cleanup_error_message = "private stream credential"
+        deliveries: list[httpx2.Request] = []
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Record any unexpected webhook delivery."""
+            deliveries.append(request)
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a news generator that fails during cancellation cleanup."""
+
+            async def events() -> AsyncGenerator[NewsItem]:
+                """Wait for cancellation and raise a secret-bearing cleanup error."""
+                try:
+                    read_waiting.set()
+                    await never_release.wait()
+                    yield NewsItem(
+                        symbols=("AAPL",),
+                        author="Benzinga Newsdesk",
+                        headline="unreachable",
+                    )
+                finally:
+                    iterator_cleaned.set()
+                    raise OSError(cleanup_error_message)
+
+            return events()
+
+        output = StringIO()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            existing_tasks = asyncio.all_tasks()
+            runtime = asyncio.create_task(run(_config(), client, _logger(output), connect_news))
+            try:
+                await asyncio.wait_for(read_waiting.wait(), timeout=1)
+                runtime.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(runtime, timeout=1)
+
+                assert iterator_cleaned.is_set()
+                assert deliveries == []
+                pending_tasks = _tasks_started_after(existing_tasks)
+                assert not pending_tasks, f"unexpected tasks after cancellation: {pending_tasks!r}"
+            finally:
+                never_release.set()
+                if not runtime.done():
+                    runtime.cancel()
+                await asyncio.gather(runtime, return_exceptions=True)
+
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        cleanup_logs = [record for record in records if record["msg"] == "failed to close Alpaca news stream"]
+        assert len(cleanup_logs) == 1
+        assert cleanup_logs[0]["error"] == "OSError"
+        assert cleanup_logs[0]["stream"] == "news"
+        assert cleanup_error_message not in output.getvalue()
 
     asyncio.run(scenario())
 
@@ -1441,40 +1494,36 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
     """Verify cleanup errors do not hide stream failures or expose credentials."""
 
     async def scenario() -> None:
-        news_iterator_closed = asyncio.Event()
-        never = asyncio.Event()
+        """Verify the news read error remains primary through cleanup."""
         cleanup_error_message = "private stream credential"
-        stock_failure_message = "stock stream stopped"
+        news_failure_message = "news stream stopped"
+
+        class NewsStream:
+            """Raise the primary read error and a separate close error."""
+
+            def __aiter__(self) -> AsyncIterator[NewsItem]:
+                """Return this news stream as its iterator."""
+                return self
+
+            async def __anext__(self) -> NewsItem:
+                """Raise the established news-stream failure."""
+                raise ConnectionError(news_failure_message)
+
+            async def aclose(self) -> None:
+                """Raise a secret-bearing cleanup error for sanitization checks."""
+                raise OSError(cleanup_error_message)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncIterable[NewsItem]:
-                try:
-                    await never.wait()
-                    yield NewsItem(
-                        symbols=("AAPL",),
-                        author="Benzinga Newsdesk",
-                        headline="unreachable",
-                    )
-                finally:
-                    news_iterator_closed.set()
-                    raise OSError(cleanup_error_message)
-
-            return events()
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            async def events() -> AsyncIterable[Trade]:
-                yield Trade(symbol="SPY", price=500.25, size=100)
-                raise ConnectionError(stock_failure_message)
-
-            return events()
+            """Return the news stream with independent read and close errors."""
+            return NewsStream()
 
         logger = _logger(StringIO())
         logger.addHandler(caplog.handler)
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _request: httpx2.Response(204))) as client:
-            with pytest.raises(RuntimeError, match=f"alpaca stock stream terminated: {stock_failure_message}"):
-                await run(_config(), client, logger, connect_news, connect_stock)
+            with pytest.raises(RuntimeError, match=f"alpaca news stream terminated: {news_failure_message}") as failure:
+                await run(_config(), client, logger, connect_news)
 
-        assert news_iterator_closed.is_set()
+        assert str(failure.value) == f"alpaca news stream terminated: {news_failure_message}"
         cleanup_logs = [
             record for record in caplog.records if record.getMessage() == "failed to close Alpaca news stream"
         ]
