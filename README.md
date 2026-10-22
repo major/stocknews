@@ -15,8 +15,11 @@ service.
 | `ALPACA_API_SECRET` | Yes | None | Alpaca API secret |
 | `ALPACA_NEWS_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v1beta1/news` | Alpaca news WebSocket URL |
 | `DISCORD_ANALYST_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for analyst ratings |
+| `DISCORD_ANALYST_ENABLED` | No | `true` | Enable analyst rating and price-target alerts |
 | `DISCORD_EARNINGS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for earnings |
+| `DISCORD_EARNINGS_ENABLED` | No | `true` | Enable earnings alerts for EPS and sales actuals versus estimates |
 | `DISCORD_NEWS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for general news |
+| `DISCORD_NEWS_ENABLED` | No | `true` | Enable general news headline alerts with optional summary and link |
 | `STOCK_LOGO` | No | `https://static.stocktitan.net/company-logo/%s.webp` | Stock logo URL template (`%s` = ticker) |
 | `TRANSPARENT_PNG` | No | `https://major.io/transparent.png` | Transparent PNG URL for Discord embed thumbnails |
 | `BLOCKED_PHRASES` | No | `if you invested,you would have,would be worth` | Comma-separated phrases to suppress |
@@ -24,6 +27,27 @@ service.
 Set configuration in the environment or in `.env` when using Compose. The two
 Alpaca credentials are required. Webhook lists and blocked phrases are
 comma-separated; empty entries are ignored.
+
+The three `DISCORD_*_ENABLED` settings accept `true`/`false`, `1`/`0`,
+`yes`/`no`, or `on`/`off`, case-insensitive and with surrounding whitespace
+ignored. They default to `true`. An explicitly empty or invalid value raises a
+`ValueError` at startup. For example, a `.env` file can enable or disable each
+category:
+
+```dotenv
+DISCORD_ANALYST_ENABLED=false
+DISCORD_EARNINGS_ENABLED=true
+DISCORD_NEWS_ENABLED=on
+```
+
+Disabling a category skips it before payload creation and enqueueing. It does
+not route those items to general news. Earnings alerts compare EPS and sales
+actuals with estimates. Analyst alerts cover ratings and price targets, except
+announced or maintained price targets are suppressed. General news includes a
+headline and may include a summary and link. All categories filter for
+Benzinga Newsdesk items with a single eligible symbol. Webhooks are still
+required to send alerts, and empty webhook lists send nothing. Setting changes
+take effect after restarting the service.
 
 `ALPACA_STOCK_STREAM_URL` is no longer used and is ignored. SPY and QQQ remain
 valid news tickers, and stock logo behavior is unchanged.

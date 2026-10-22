@@ -29,6 +29,9 @@ def load_config(environ: Mapping[str, str]) -> Config:
         discord_analyst_webhooks=csv_values(environ.get("DISCORD_ANALYST_WEBHOOKS", "")),
         discord_earnings_webhooks=csv_values(environ.get("DISCORD_EARNINGS_WEBHOOKS", "")),
         discord_news_webhooks=csv_values(environ.get("DISCORD_NEWS_WEBHOOKS", "")),
+        discord_analyst_enabled=_boolean_env(environ, "DISCORD_ANALYST_ENABLED"),
+        discord_earnings_enabled=_boolean_env(environ, "DISCORD_EARNINGS_ENABLED"),
+        discord_news_enabled=_boolean_env(environ, "DISCORD_NEWS_ENABLED"),
         stock_logo=environ.get("STOCK_LOGO", _DEFAULT_STOCK_LOGO),
         transparent_png=environ.get("TRANSPARENT_PNG", _DEFAULT_TRANSPARENT_PNG),
         blocked_phrases=csv_values(environ.get("BLOCKED_PHRASES", _DEFAULT_BLOCKED_PHRASES)),
@@ -41,3 +44,18 @@ def _required_env(environ: Mapping[str, str], key: str) -> str:
         error_message = f"{key} is required"
         raise ValueError(error_message)
     return value
+
+
+def _boolean_env(environ: Mapping[str, str], key: str) -> bool:
+    """Parse a boolean environment setting, defaulting missing settings to true."""
+    value = environ.get(key)
+    if value is None:
+        return True
+
+    normalized = value.strip().casefold()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    error_message = f"{key} must be a boolean"
+    raise ValueError(error_message)

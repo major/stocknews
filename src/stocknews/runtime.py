@@ -65,12 +65,31 @@ async def _next[T](stream: AsyncIterator[T]) -> T | _StreamEnded:
 
 
 def _make_delivery(item: NewsItem, config: Config, logger: logging.Logger) -> _Delivery | None:
+    """Classify a news item and build its enabled Discord delivery, if any."""
     classification = classify_news(item, config.blocked_phrases)
     if classification not in {"earnings", "analyst", "news"}:
         logger.info(
             "skipping news item",
             extra={
                 "reason": classification,
+                "headline": unescape(item.headline),
+                "author": item.author,
+                "symbols": item.symbols,
+            },
+        )
+        return None
+
+    category_enabled = {
+        "earnings": config.discord_earnings_enabled,
+        "analyst": config.discord_analyst_enabled,
+        "news": config.discord_news_enabled,
+    }[classification]
+    if not category_enabled:
+        logger.info(
+            "skipping news item",
+            extra={
+                "reason": "category_disabled",
+                "kind": classification,
                 "headline": unescape(item.headline),
                 "author": item.author,
                 "symbols": item.symbols,
