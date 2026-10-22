@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -22,6 +23,7 @@ from stocknews.models import AlpacaSettings, NewsItem
 
 EXPECTED_EVENT_QUEUE_CAPACITY = 256
 EXPECTED_RECONNECT_ATTEMPT = 2
+EXPECTED_DIAGNOSTIC_TEXT_LIMIT = 64
 
 # Fake credentials used by stream fixtures that do not inspect authentication.
 TEST_API_KEY = "key"
@@ -135,7 +137,11 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(
 
     asyncio.run(scenario())
 
-    records = [record for record in caplog.records if record.name == alpaca.__name__]
+    records = [
+        record
+        for record in caplog.records
+        if record.name == alpaca.__name__ and record.getMessage() != "received Alpaca stream message"
+    ]
     assert [record.getMessage() for record in records] == [
         "connecting to Alpaca stream",
         "connected to Alpaca stream",
@@ -708,7 +714,11 @@ def test_stop_set_on_transport_failure_skips_reconnect_warning(
         assert connection_count == 1
 
     asyncio.run(scenario())
-    messages = [record.getMessage() for record in caplog.records if record.name == alpaca.__name__]
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == alpaca.__name__ and record.getMessage() != "received Alpaca stream message"
+    ]
     assert messages == [
         "connecting to Alpaca stream",
         "connected to Alpaca stream",
@@ -1859,3 +1869,144 @@ def test_initial_loopback_socket_reset_fails_stream_startup() -> None:
         assert REDACTION_TEST_API_CREDENTIAL not in str(error.value)
 
     asyncio.run(scenario())
+
+
+def test_decoded_stream_messages_log_safe_metadata_once_before_parsing(caplog: pytest.LogCaptureFixture) -> None:
+    """Log safe metadata for handshake, pending, mixed-source, and ignored messages once."""
+    caplog.set_level("INFO", logger=alpaca.__name__)
+    api_key = "diagnostic-key"
+    api_credential = "diagnostic-secret"
+    private_body = "private-body-content"
+    private_url = "https://private.example/news"
+    private_provider_text = "private-provider-message"
+
+    async def scenario() -> None:
+        """Run a local Alpaca handshake followed by mixed news and ignored messages."""
+
+        async def app(
+            scope: dict[str, object],
+            receive: Callable[..., Awaitable[dict[str, object]]],
+            send: Callable[..., Awaitable[None]],
+        ) -> None:
+            """Send staged and stream messages, then wait for client shutdown."""
+            await receive()
+            await send({"type": "websocket.accept"})
+            while True:
+                incoming = await receive()
+                if incoming["type"] == "websocket.disconnect":
+                    return
+                request = json.loads(incoming["text"])
+                if request["action"] == "auth":
+                    await _send_json(
+                        send,
+                        [
+                            {
+                                "T": f"auth-{api_key}",
+                                "id": True,
+                                "source": api_key,
+                                "author": api_credential,
+                                "msg": private_provider_text,
+                                "key": api_key,
+                                "secret": api_credential,
+                            },
+                            {"T": "success", "msg": "authenticated"},
+                        ],
+                    )
+                    continue
+                await _send_json(
+                    send,
+                    [
+                        {
+                            "T": "n",
+                            "id": True,
+                            "symbols": ["PEND"],
+                            "source": "pending-source",
+                            "author": "Pending Desk",
+                            "headline": private_body,
+                        },
+                        {
+                            "T": "t" * 60 + api_credential,
+                            "id": 42,
+                            "source": None,
+                            "author": {"private": api_key},
+                            "msg": private_provider_text,
+                        },
+                        {"T": "subscription", "news": ["*"]},
+                    ],
+                )
+                await _send_json(
+                    send,
+                    [
+                        {
+                            "T": "n",
+                            "id": 7,
+                            "symbols": ["BZFD"],
+                            "source": "s" * 60 + api_key,
+                            "author": "a" * 60 + api_credential,
+                            "headline": private_body,
+                            "summary": private_body,
+                            "content": private_body,
+                            "url": private_url,
+                            "key": api_key,
+                            "secret": api_credential,
+                            "msg": private_provider_text,
+                        },
+                        {
+                            "T": "n",
+                            "id": "article-id-is-not-an-int",
+                            "symbols": ["FISC"],
+                            "source": "fiscal.ai",
+                            "author": "Fiscal Desk",
+                            "headline": private_body,
+                        },
+                        {"T": {"private": api_credential}, "id": 12, "source": 9, "author": False},
+                    ],
+                )
+
+        stop_event = asyncio.Event()
+        async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
+            stream = await alpaca.start_news_stream(
+                client,
+                settings=AlpacaSettings(
+                    api_key=api_key,
+                    api_secret=api_credential,
+                    news_stream_url="ws://alpaca.test/v1beta1/news",
+                ),
+                stop_event=stop_event,
+            )
+            items = [await asyncio.wait_for(stream.events.get(), timeout=2) for _ in range(3)]
+            assert [item.source for item in items] == ["pending-source", "s" * 60 + api_key, "fiscal.ai"]
+            stop_event.set()
+            await asyncio.wait_for(stream.task, timeout=2)
+
+    asyncio.run(scenario())
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == alpaca.__name__ and record.getMessage() == "received Alpaca stream message"
+    ]
+    assert [
+        (record.stream, record.stage, record.message_type, record.article_id, record.source, record.author)
+        for record in records
+    ] == [
+        ("news", "authentication", f"auth-{api_key}".replace(api_key, "[redacted]"), None, "[redacted]", "[redacted]"),
+        ("news", "authentication", "success", None, "", ""),
+        ("news", "subscription", "n", None, "pending-source", "Pending Desk"),
+        ("news", "subscription", "t" * 60 + "[red", 42, "", ""),
+        ("news", "subscription", "subscription", None, "", ""),
+        ("news", "stream", "n", 7, "s" * 60 + "[red", "a" * 60 + "[red"),
+        ("news", "stream", "n", None, "fiscal.ai", "Fiscal Desk"),
+        ("news", "stream", "", 12, "", ""),
+    ]
+    standard_fields = set(logging.makeLogRecord({}).__dict__) | {"message"}
+    safe_fields = {"stream", "stage", "message_type", "article_id", "source", "author"}
+    for record in records:
+        assert set(record.__dict__) - standard_fields == safe_fields
+        assert all(
+            len(getattr(record, field)) <= EXPECTED_DIAGNOSTIC_TEXT_LIMIT
+            for field in ("message_type", "source", "author")
+        )
+    captured = "\n".join(repr(record.__dict__) for record in records)
+    for private_value in (api_key, api_credential, private_body, private_provider_text, private_url):
+        assert private_value not in captured
