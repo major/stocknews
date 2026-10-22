@@ -671,6 +671,77 @@ def test_terminal_protocol_error_without_callback_raises_from_stream_task() -> N
     asyncio.run(scenario())
 
 
+class _StopOnActionWebSocket:
+    """Script a stop request when the selected protocol action is sent."""
+
+    def __init__(self, stop_event: asyncio.Event, stop_after_action: str) -> None:
+        """Save the stop event and action that trigger shutdown."""
+        self.stop_event = stop_event
+        self.stop_after_action = stop_after_action
+        self.requests: list[dict[str, object]] = []
+        self.receive_count = 0
+
+    async def send_json(self, message: dict[str, object]) -> None:
+        """Record a wire-normalized request and synchronously stop after the selected action."""
+        self.requests.append(
+            {key: list(value) if isinstance(value, tuple) else value for key, value in message.items()}
+        )
+        if message["action"] == self.stop_after_action:
+            self.stop_event.set()
+
+    async def receive_json(self, **_: object) -> object:
+        """Return the auth acknowledgment, rejecting reads after shutdown."""
+        self.receive_count += 1
+        assert not self.stop_event.is_set()
+        assert self.requests
+        assert self.requests[-1]["action"] == "auth"
+        return {"T": "success", "msg": "authenticated"}
+
+
+@pytest.mark.parametrize("stopped_stage", ["auth", "subscription"], ids=["auth", "subscription"])
+def test_news_handshake_stops_without_reading_the_next_ack(stopped_stage: str) -> None:
+    """Stop deterministically during either news handshake stage.
+
+    Args:
+        stopped_stage: Handshake action that synchronously sets the stop event.
+    """
+
+    async def scenario() -> None:
+        """Arrange a news stream and stop after the selected request."""
+        stop_event = asyncio.Event()
+        stop_after_action = "auth" if stopped_stage == "auth" else "subscribe"
+        websocket = _StopOnActionWebSocket(stop_event, stop_after_action)
+        async with httpx2.AsyncClient() as client:
+            config = alpaca._StreamConfig(  # noqa: SLF001
+                client=client,
+                url="ws://alpaca.test/v1beta1/news",
+                api_key=NEWS_TEST_API_KEY,
+                api_secret=NEWS_TEST_API_CREDENTIAL,
+                stream_name="news",
+                channel="news",
+                symbols=("*",),
+                parse_event=alpaca._parse_news,  # noqa: SLF001
+            )
+            pending_messages = await alpaca._authenticate_and_subscribe(  # noqa: SLF001
+                config,
+                cast("httpx2.websockets.AsyncWebSocketSession", websocket),
+                stop_event,
+            )
+
+        expected_requests = [{"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL}]
+        expected_receive_count = 0
+        if stopped_stage == "subscription":
+            expected_requests.append({"action": "subscribe", "news": ["*"]})
+            expected_receive_count = 1
+
+        assert stop_event.is_set()
+        assert websocket.requests == expected_requests
+        assert websocket.receive_count == expected_receive_count
+        assert pending_messages == []
+
+    asyncio.run(scenario())
+
+
 def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None:
     """Skip connection setup and avoid task leaks when shutdown is already requested."""
 
