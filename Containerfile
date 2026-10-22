@@ -1,19 +1,21 @@
-FROM registry.access.redhat.com/ubi9/python-314:latest@sha256:c19e852fe0c935dad0ecc2ef6a90582612e57ed4653ca32ec974606637520ce2 AS builder
+FROM docker.io/library/python:3.15.1-slim-trixie@sha256:08275f764e022331c6d3e3ca55d8cce01fa4684b02111adf0445d71806fe7941 AS builder
 
 WORKDIR /opt/app-root/src
 
 COPY pyproject.toml uv.lock .python-version ./
 COPY src ./src
 
-RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
-    && uv sync --locked --no-dev --no-editable --python python3.14
+RUN python3 -m pip install --no-cache-dir uv==0.13.5 \
+    && uv sync --locked --no-dev --no-editable --python python3.15
 
-FROM registry.access.redhat.com/ubi9/python-314:latest@sha256:c19e852fe0c935dad0ecc2ef6a90582612e57ed4653ca32ec974606637520ce2
+FROM docker.io/library/python:3.15.1-slim-trixie@sha256:08275f764e022331c6d3e3ca55d8cce01fa4684b02111adf0445d71806fe7941
 
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 
 WORKDIR /opt/app-root/src
+
+RUN useradd --uid 1001 --gid 0 --home-dir /opt/app-root/src --no-create-home stocknews
 
 COPY --from=builder --chown=1001:0 /opt/app-root/src/.venv /opt/app-root/src/.venv
 

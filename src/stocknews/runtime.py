@@ -36,12 +36,7 @@ class _Delivery:
     symbol: str
 
 
-@dataclass(frozen=True, slots=True)
-class _StreamEnded:
-    pass
-
-
-_STREAM_ENDED = _StreamEnded()
+_STREAM_ENDED = sentinel("_STREAM_ENDED")
 
 
 @dataclass(slots=True)
@@ -49,7 +44,7 @@ class _RunState:
     jobs: asyncio.Queue[_Delivery | None]
     worker: asyncio.Task[None] | None = None
     news_iterator: AsyncIterator[NewsItem] | None = None
-    news_read: asyncio.Task[NewsItem | _StreamEnded] | None = None
+    news_read: asyncio.Task[NewsItem | _STREAM_ENDED] | None = None
     worker_cancelled: bool = False
 
     def cancel_worker(self) -> None:
@@ -58,7 +53,8 @@ class _RunState:
             self.worker_cancelled = True
 
 
-async def _next[T](stream: AsyncIterator[T]) -> T | _StreamEnded:
+async def _next[T](stream: AsyncIterator[T]) -> T | _STREAM_ENDED:
+    """Return the next stream item or the EOF sentinel."""
     try:
         return await anext(stream)
     except StopAsyncIteration:
@@ -200,7 +196,7 @@ def _process_news_read(
     except Exception as error:
         error_message = f"alpaca news stream terminated: {error}"
         raise RuntimeError(error_message) from error
-    if isinstance(message, _StreamEnded):
+    if message is _STREAM_ENDED:
         return True
 
     # Log every received item before filtering so skips always have a receipt record.

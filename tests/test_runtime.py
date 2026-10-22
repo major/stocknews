@@ -17,7 +17,7 @@ from stocknews.__main__ import run_application
 from stocknews.config import load_config
 from stocknews.logging import JSONFormatter, configure_logging
 from stocknews.models import Config, NewsItem
-from stocknews.runtime import _settle_task, run
+from stocknews.runtime import _STREAM_ENDED, _next, _settle_task, run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
@@ -1264,6 +1264,25 @@ def test_cancellation_reports_sanitized_pending_news_read_failure() -> None:
         assert cleanup_logs[0]["error"] == "OSError"
         assert cleanup_logs[0]["stream"] == "news"
         assert cleanup_error_message not in output.getvalue()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", [None, 0, ""], ids=["none", "zero", "empty-string"])
+def test_next_preserves_falsey_values_before_repeated_eof(value: object) -> None:
+    """Verify falsey stream values are preserved before repeated EOF reads."""
+
+    async def scenario() -> None:
+        """Read one falsey value and then confirm EOF remains a singleton."""
+
+        async def events() -> AsyncIterator[object]:
+            """Yield the parameterized falsey value once."""
+            yield value
+
+        iterator = events()
+        assert await _next(iterator) is value
+        assert await _next(iterator) is _STREAM_ENDED
+        assert await _next(iterator) is _STREAM_ENDED
 
     asyncio.run(scenario())
 
