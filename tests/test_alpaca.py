@@ -21,6 +21,7 @@ from stocknews import alpaca
 from stocknews.models import AlpacaSettings, NewsItem
 
 EXPECTED_EVENT_QUEUE_CAPACITY = 256
+EXPECTED_RECONNECT_ATTEMPT = 2
 
 # Fake credentials used by stream fixtures that do not inspect authentication.
 TEST_API_KEY = "key"
@@ -54,8 +55,11 @@ def test_alpaca_settings_repr_excludes_credentials() -> None:
 
 
 @pytest.mark.parametrize("wrapped_subscription", [False, True], ids=["flat-ack", "wrapped-ack"])
-def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscription: bool) -> None:
+def test_news_stream_authenticates_subscribes_and_decodes_events(
+    wrapped_subscription: bool, caplog: pytest.LogCaptureFixture
+) -> None:
     """Authenticate to the news stream, subscribe, and decode the delivered article."""
+    caplog.set_level("INFO", logger=alpaca.__name__)
 
     async def scenario() -> None:
         requests: list[dict[str, object]] = []
@@ -131,6 +135,18 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
 
     asyncio.run(scenario())
 
+    records = [record for record in caplog.records if record.name == alpaca.__name__]
+    assert [record.getMessage() for record in records] == [
+        "connecting to Alpaca stream",
+        "connected to Alpaca stream",
+        "authenticated Alpaca stream",
+        "subscribed to Alpaca stream",
+    ]
+    assert [(record.stream, record.attempt) for record in records] == [("news", 1)] * 4
+    assert records[-1].channel == "news"
+    assert records[-1].symbols == ("*",)
+    assert not any(record.getMessage() == "reconnecting Alpaca stream" for record in records)
+
 
 def test_news_parser_defaults_raw_fields_to_empty_when_absent() -> None:
     """Use empty strings for absent raw Alpaca news fields."""
@@ -157,14 +173,16 @@ def test_news_parser_defaults_raw_fields_to_empty_when_absent() -> None:
     ids=["provider-error-redacts-credentials", "missing-error-details-use-safe-fallback"],
 )
 def test_initial_news_auth_failure_is_raised_without_exposing_credentials(
-    response: dict[str, object], diagnostic: str
+    response: dict[str, object], diagnostic: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Keep credentials out of errors and tracebacks when initial news authentication fails.
 
     Args:
         response: Authentication response sent by the provider.
         diagnostic: Expected safe detail in the resulting error.
+        caplog: Fixture that captures Alpaca lifecycle logs.
     """
+    caplog.set_level("INFO", logger=alpaca.__name__)
 
     async def scenario() -> None:
         async def app(
@@ -198,6 +216,10 @@ def test_initial_news_auth_failure_is_raised_without_exposing_credentials(
         assert AUTH_FAILURE_API_CREDENTIAL not in formatted
 
     asyncio.run(scenario())
+    messages = [record.getMessage() for record in caplog.records if record.name == alpaca.__name__]
+    assert "authenticated Alpaca stream" not in messages
+    assert "subscribed to Alpaca stream" not in messages
+    assert "reconnecting Alpaca stream" not in messages
 
 
 @pytest.mark.parametrize(
@@ -209,12 +231,13 @@ def test_initial_news_auth_failure_is_raised_without_exposing_credentials(
     ids=["connection-refused", "connection-timeout"],
 )
 def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentials(
-    failure: httpx2.TransportError,
+    failure: httpx2.TransportError, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Report initial transport failures without leaking credentials or leaving tasks behind.
 
     Args:
         failure: Transport error raised before the WebSocket handshake.
+        caplog: Fixture that captures Alpaca lifecycle logs.
     """
 
     async def scenario() -> None:
@@ -258,6 +281,11 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
         assert REDACTION_TEST_API_CREDENTIAL not in formatted
 
     asyncio.run(scenario())
+    assert not any(
+        record.getMessage() == "reconnecting Alpaca stream"
+        for record in caplog.records
+        if record.name == alpaca.__name__
+    )
 
 
 def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -573,6 +601,7 @@ def test_news_handshake_stops_without_reading_the_next_ack(stopped_stage: str) -
                 config,
                 cast("httpx2.websockets.AsyncWebSocketSession", websocket),
                 stop_event,
+                attempt=1,
             )
 
         expected_requests = [{"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL}]
@@ -623,8 +652,76 @@ def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None
     asyncio.run(scenario())
 
 
-def test_established_subscription_failure_uses_terminal_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_set_on_transport_failure_skips_reconnect_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Skip the retry warning if shutdown is requested as a connection fails."""
+    caplog.set_level("INFO", logger=alpaca.__name__)
+
+    async def scenario() -> None:
+        """Stop an established ASGI stream after its server disconnects."""
+        stop_event = asyncio.Event()
+        connection_count = 0
+
+        async def app(
+            scope: dict[str, object],
+            receive: Callable[..., Awaitable[dict[str, object]]],
+            send: Callable[..., Awaitable[None]],
+        ) -> None:
+            nonlocal connection_count
+            connection_count += 1
+            await receive()
+            await send({"type": "websocket.accept"})
+            await receive()
+            await _send_json(send, {"T": "success", "msg": "authenticated"})
+            await receive()
+            await _send_json(send, {"T": "subscription", "news": ["*"]})
+            await send({"type": "websocket.close", "code": 1001, "reason": "shutdown"})
+
+        read_connection = alpaca._read_connection  # noqa: SLF001
+
+        async def set_stop_after_disconnect(
+            config: alpaca._StreamConfig[NewsItem],
+            event: asyncio.Event,
+            events: asyncio.Queue[NewsItem],
+            started: asyncio.Future[None],
+            attempt: int,
+        ) -> alpaca._Stopped | alpaca._TransportFailure | alpaca._TerminalFailure:
+            """Set shutdown after the real connection adapter reports a disconnect."""
+            outcome = await read_connection(config, event, events, started, attempt)
+            if isinstance(outcome, alpaca._TransportFailure):  # noqa: SLF001
+                event.set()
+            return outcome
+
+        monkeypatch.setattr(alpaca, "_read_connection", set_stop_after_disconnect)
+        async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
+            stream = await alpaca.start_news_stream(
+                client,
+                settings=AlpacaSettings(
+                    api_key=TEST_API_KEY,
+                    api_secret=TEST_API_CREDENTIAL,
+                    news_stream_url="ws://alpaca.test/v1beta1/news",
+                ),
+                stop_event=stop_event,
+            )
+            await asyncio.wait_for(stream.task, timeout=2)
+        assert connection_count == 1
+
+    asyncio.run(scenario())
+    messages = [record.getMessage() for record in caplog.records if record.name == alpaca.__name__]
+    assert messages == [
+        "connecting to Alpaca stream",
+        "connected to Alpaca stream",
+        "authenticated Alpaca stream",
+        "subscribed to Alpaca stream",
+    ]
+
+
+def test_established_subscription_failure_uses_terminal_callback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Report news resubscription failures without setting the stop event."""
+    caplog.set_level("INFO", logger=alpaca.__name__)
 
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
@@ -650,7 +747,13 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
                     await _send_json(send, {"T": "success", "msg": "authenticated"})
                 elif connection_count == 1:
                     await _send_json(send, {"T": "subscription", "news": ["*"]})
-                    await send({"type": "websocket.close", "code": 1001, "reason": "reconnect"})
+                    await send(
+                        {
+                            "type": "websocket.close",
+                            "code": 1001,
+                            "reason": f"reconnect {REDACTION_TEST_API_KEY} {REDACTION_TEST_API_CREDENTIAL}",
+                        }
+                    )
                     return
                 else:
                     await _send_json(
@@ -687,6 +790,35 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
         assert not stop_event.is_set()
 
     asyncio.run(scenario())
+
+    records = [record for record in caplog.records if record.name == alpaca.__name__]
+    reconnect_index = next(
+        index for index, record in enumerate(records) if record.getMessage() == "reconnecting Alpaca stream"
+    )
+    assert [record.getMessage() for record in records][reconnect_index - 1 : reconnect_index + 2] == [
+        "subscribed to Alpaca stream",
+        "reconnecting Alpaca stream",
+        "connecting to Alpaca stream",
+    ]
+    reconnect = records[reconnect_index]
+    assert reconnect.stream == "news"
+    assert reconnect.attempt == EXPECTED_RECONNECT_ATTEMPT
+    assert reconnect.retry_delay_seconds == 0
+    assert "WebSocket disconnected with code 1001" in reconnect.error_summary
+    assert "[redacted]" in reconnect.error_summary
+    assert REDACTION_TEST_API_KEY not in reconnect.error_summary
+    assert REDACTION_TEST_API_CREDENTIAL not in reconnect.error_summary
+    assert [(record.getMessage(), record.attempt) for record in records if hasattr(record, "attempt")] == [
+        ("connecting to Alpaca stream", 1),
+        ("connected to Alpaca stream", 1),
+        ("authenticated Alpaca stream", 1),
+        ("subscribed to Alpaca stream", 1),
+        ("reconnecting Alpaca stream", 2),
+        ("connecting to Alpaca stream", 2),
+        ("connected to Alpaca stream", 2),
+        ("authenticated Alpaca stream", 2),
+    ]
+    assert sum(record.getMessage() == "reconnecting Alpaca stream" for record in records) == 1
 
 
 async def _send_json(send: Callable[..., Awaitable[None]], payload: object) -> None:
@@ -937,12 +1069,16 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
     [[], "*", ["*", 17]],
     ids=["missing-requested-symbol", "wrong-acknowledgement-type", "non-text-symbol"],
 )
-def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: object) -> None:
+def test_loopback_subscription_ack_requires_all_requested_symbols(
+    acknowledged: object, caplog: pytest.LogCaptureFixture
+) -> None:
     """Reject news subscriptions with an invalid acknowledgment.
 
     Args:
         acknowledged: Symbols or malformed data returned in the acknowledgment.
+        caplog: Fixture that captures Alpaca lifecycle logs.
     """
+    caplog.set_level("INFO", logger=alpaca.__name__)
 
     async def scenario() -> None:
         async def handler(
@@ -972,6 +1108,10 @@ def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: 
                 )
 
     asyncio.run(scenario())
+    messages = [record.getMessage() for record in caplog.records if record.name == alpaca.__name__]
+    assert "authenticated Alpaca stream" in messages
+    assert "subscribed to Alpaca stream" not in messages
+    assert "reconnecting Alpaca stream" not in messages
 
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
@@ -1208,13 +1348,16 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
 def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
     monkeypatch: pytest.MonkeyPatch,
     network_error: type[Exception],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Reconnect and resubscribe after an injected keepalive write failure.
 
     Args:
         monkeypatch: Fixture used to set the keepalive and reconnect timing.
         network_error: Write error type injected into the ping operation.
+        caplog: Fixture that captures Alpaca lifecycle logs.
     """
+    caplog.set_level("INFO", logger=alpaca.__name__)
 
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_INTERVAL_SECONDS", 0.5)
@@ -1254,7 +1397,11 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
                             },
                         )
 
-        transport = _PingFailureTransport(app, {1: network_error("injected keepalive failure")})
+        grouped_failure = ExceptionGroup(
+            f"ping failed while handling {REDACTION_TEST_API_KEY} {REDACTION_TEST_API_CREDENTIAL}",
+            [network_error(f"injected keepalive failure {REDACTION_TEST_API_CREDENTIAL}")],
+        )
+        transport = _PingFailureTransport(app, {1: grouped_failure})
         stop_event = asyncio.Event()
         async with transport, httpx2.AsyncClient(transport=transport) as client:
             stream = await alpaca.start_news_stream(
@@ -1275,6 +1422,16 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
             await asyncio.wait_for(stream.task, timeout=2)
 
     asyncio.run(scenario())
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == alpaca.__name__ and record.getMessage() == "reconnecting Alpaca stream"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].attempt == EXPECTED_RECONNECT_ATTEMPT
+    assert "ExceptionGroup" in warnings[0].error_summary
+    assert REDACTION_TEST_API_KEY not in warnings[0].error_summary
+    assert REDACTION_TEST_API_CREDENTIAL not in warnings[0].error_summary
 
 
 def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
