@@ -21,6 +21,7 @@ from stocknews.runtime import _settle_task, run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
+_RECEIPT_CONTENT_LIMIT = 250
 _DUMMY_ALPACA_CREDENTIALS = ("key", "secret")
 _DUMMY_ALPACA_API_KEY, _DUMMY_ALPACA_API_SECRET = _DUMMY_ALPACA_CREDENTIALS
 type ASGIReceive = Callable[[], Awaitable[MutableMapping[str, Any]]]
@@ -593,6 +594,56 @@ def test_received_news_item_logs_empty_defaults_for_absent_optional_fields() -> 
         }
         assert len(receipts) == 1
         assert {key: receipts[0][key] for key in expected_receipt} == expected_receipt
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "Short 🙂 café",
+        "é" * 250,
+        "é" * 251,
+        "🙂" * 300,
+    ],
+    ids=["empty", "short-unicode", "exactly-250", "251-characters", "long-emoji"],
+)
+def test_received_news_item_logs_content_limited_to_250_characters(content: str) -> None:
+    """Verify receipt logs truncate content by characters while the model keeps the full text."""
+
+    async def scenario() -> None:
+        """Run one item with the parameterized content through the runtime."""
+        item = NewsItem(
+            symbols=("AAPL",),
+            author="Benzinga Newsdesk",
+            headline="Apple announces a phone",
+            content=content,
+        )
+
+        async def handler(_request: httpx2.Request) -> httpx2.Response:
+            """Accept the webhook request for the test item."""
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a stream containing only the parameterized item."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield the parameterized item once."""
+                yield item
+
+            return events()
+
+        output = StringIO()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(output), connect_news)
+
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        receipts = [record for record in records if record["msg"] == "received news item"]
+        logged_content = receipts[0]["content"]
+        assert logged_content == content[:_RECEIPT_CONTENT_LIMIT]
+        assert len(logged_content) <= _RECEIPT_CONTENT_LIMIT
+        assert item.content == content
 
     asyncio.run(scenario())
 
