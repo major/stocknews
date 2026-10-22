@@ -19,6 +19,7 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     )
 
     assert settings.alpaca_news_stream_url == "wss://stream.data.alpaca.markets/v1beta1/news"
+    assert settings.alpaca_stock_stream_url == "wss://stream.data.alpaca.markets/v2"
     assert settings.stock_logo == "https://static.stocktitan.net/company-logo/%s.webp"
     assert settings.transparent_png == "https://major.io/transparent.png"
     assert settings.discord_analyst_webhooks == ("a", "b")
@@ -41,6 +42,7 @@ def test_config_preserves_explicitly_empty_optional_values() -> None:
             "ALPACA_API_KEY": " key ",
             "ALPACA_API_SECRET": "secret",
             "ALPACA_NEWS_STREAM_URL": "",
+            "ALPACA_STOCK_STREAM_URL": "",
             "STOCK_LOGO": "",
             "TRANSPARENT_PNG": "",
             "BLOCKED_PHRASES": "",
@@ -49,6 +51,7 @@ def test_config_preserves_explicitly_empty_optional_values() -> None:
 
     assert settings.alpaca_api_key == " key "
     assert settings.alpaca_news_stream_url == ""
+    assert settings.alpaca_stock_stream_url == ""
     assert settings.stock_logo == ""
     assert settings.transparent_png == ""
     assert settings.blocked_phrases == ()

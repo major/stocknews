@@ -1,9 +1,9 @@
 # stocknews
 
-stocknews is a Python 3.14 service that reads the Alpaca news stream and sends
-relevant alerts to Discord. It filters for Benzinga Newsdesk items and routes
-qualifying headlines to earnings, analyst, or general news webhooks through a
-bounded worker.
+stocknews is a Python 3.14 service that reads Alpaca news and stock streams and
+sends relevant alerts to Discord. It filters for Benzinga Newsdesk items and
+routes qualifying headlines to earnings, analyst, or general news webhooks. It
+also logs IEX trades for SPY and QQQ through a bounded worker.
 
 The package is in `src/stocknews/`. The `stocknews` console command starts the
 service.
@@ -15,6 +15,7 @@ service.
 | `ALPACA_API_KEY` | Yes | None | Alpaca API key |
 | `ALPACA_API_SECRET` | Yes | None | Alpaca API secret |
 | `ALPACA_NEWS_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v1beta1/news` | Alpaca news WebSocket URL |
+| `ALPACA_STOCK_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v2` | Alpaca stock WebSocket URL for IEX trades |
 | `DISCORD_ANALYST_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for analyst ratings |
 | `DISCORD_EARNINGS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for earnings |
 | `DISCORD_NEWS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for general news |
