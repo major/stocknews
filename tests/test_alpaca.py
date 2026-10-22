@@ -29,6 +29,8 @@ TEST_API_CREDENTIAL = "secret"
 # Fake credentials used when tests inspect authentication requests.
 NEWS_TEST_API_KEY = "news-key"
 NEWS_TEST_API_CREDENTIAL = "news-secret"
+# Raw article body with HTML markup and newlines, which must reach consumers unchanged.
+CONTENT_WITH_HTML_AND_NEWLINES = "<p>Raw <strong>HTML</strong> content.</p>\n<p>Second line.</p>\n"
 # Fake credentials deliberately included in failures to verify redaction.
 REDACTION_TEST_API_KEY = "private-key"
 REDACTION_TEST_API_CREDENTIAL = "private-secret"
@@ -92,6 +94,8 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
                                 "headline": "A headline",
                                 "summary": "A summary",
                                 "url": "https://example.test/news",
+                                "source": "benzinga",
+                                "content": CONTENT_WITH_HTML_AND_NEWLINES,
                             },
                         ],
                     )
@@ -115,6 +119,8 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
                 headline="A headline",
                 summary="A summary",
                 url="https://example.test/news",
+                source="benzinga",
+                content=CONTENT_WITH_HTML_AND_NEWLINES,
             )
             assert requests == [
                 {"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL},
@@ -124,6 +130,15 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
             await asyncio.wait_for(stream.task, timeout=2)
 
     asyncio.run(scenario())
+
+
+def test_news_parser_defaults_raw_fields_to_empty_when_absent() -> None:
+    """Use empty strings for absent raw Alpaca news fields."""
+    item = alpaca._parse_news({"T": "n"})  # noqa: SLF001
+
+    assert item == NewsItem(symbols=(), author="", headline="")
+    assert item.source == ""
+    assert item.content == ""
 
 
 @pytest.mark.parametrize(
@@ -412,8 +427,13 @@ def test_unexpected_binary_message_terminates_the_stream() -> None:
 
 @pytest.mark.parametrize(
     ("field", "value", "diagnostic"),
-    [("author", 17, "author"), ("symbols", "AAPL", "symbols")],
-    ids=["author-type", "symbols-type"],
+    [
+        ("author", 17, "author"),
+        ("symbols", "AAPL", "symbols"),
+        ("source", 17, "source"),
+        ("content", 17, "content"),
+    ],
+    ids=["author-type", "symbols-type", "source-type", "content-type"],
 )
 def test_invalid_news_field_terminates_established_stream(field: str, value: object, diagnostic: str) -> None:
     """Terminate the news stream when an article field has an invalid value.

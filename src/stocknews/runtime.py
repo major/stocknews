@@ -202,6 +202,18 @@ def _process_news_read(
     if isinstance(message, _StreamEnded):
         return True
 
+    # Log every received item before filtering so skips always have a receipt record.
+    logger.info(
+        "received news item",
+        extra={
+            "headline": message.headline,
+            "summary": message.summary,
+            "source": message.source,
+            "content": message.content,
+            "url": message.url,
+            "symbols": message.symbols,
+        },
+    )
     delivery = _make_delivery(message, config, logger)
     if delivery is not None:
         try:

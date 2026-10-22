@@ -485,6 +485,118 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
     asyncio.run(scenario())
 
 
+def test_every_received_news_item_is_logged_once_before_filtering() -> None:
+    """Verify each received item gets one exact receipt log before any skip log."""
+
+    async def scenario() -> None:
+        """Run an accepted item and a filtered item through the runtime."""
+        accepted = NewsItem(
+            symbols=(" AAPL ", "NASDAQ:BAD"),
+            author="Benzinga Newsdesk",
+            headline="Apple launches a new iPhone &amp; more",
+            summary="Line one\n<b>Line two</b>",
+            source="benzinga",
+            content="<p>Body &amp; text</p>\n\tIndented line",
+            url="https://example.test/news?id=1&amp;x=2",
+        )
+        filtered = NewsItem(
+            symbols=("NYSE:IBM", "MSFT"),
+            author="Someone Else",
+            headline="Microsoft launches a tablet",
+            summary="Filtered summary",
+            source="other-feed",
+            content="Filtered content",
+            url="https://example.test/filtered",
+        )
+
+        async def handler(_request: httpx2.Request) -> httpx2.Response:
+            """Accept every webhook request."""
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return the accepted item followed by the filtered item."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield both items in order."""
+                yield accepted
+                yield filtered
+
+            return events()
+
+        output = StringIO()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(output), connect_news)
+
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        receipt_and_skip_messages = [
+            record["msg"] for record in records if record["msg"] in {"received news item", "skipping news item"}
+        ]
+        receipts = [record for record in records if record["msg"] == "received news item"]
+        accepted_receipt = {
+            "level": "INFO",
+            "headline": "Apple launches a new iPhone &amp; more",
+            "summary": "Line one\n<b>Line two</b>",
+            "source": "benzinga",
+            "content": "<p>Body &amp; text</p>\n\tIndented line",
+            "url": "https://example.test/news?id=1&amp;x=2",
+            "symbols": [" AAPL ", "NASDAQ:BAD"],
+        }
+        filtered_receipt = {
+            "level": "INFO",
+            "headline": "Microsoft launches a tablet",
+            "summary": "Filtered summary",
+            "source": "other-feed",
+            "content": "Filtered content",
+            "url": "https://example.test/filtered",
+            "symbols": ["NYSE:IBM", "MSFT"],
+        }
+        assert receipt_and_skip_messages == ["received news item", "received news item", "skipping news item"]
+        assert {key: receipts[0][key] for key in accepted_receipt} == accepted_receipt
+        assert {key: receipts[1][key] for key in filtered_receipt} == filtered_receipt
+
+    asyncio.run(scenario())
+
+
+def test_received_news_item_logs_empty_defaults_for_absent_optional_fields() -> None:
+    """Verify absent optional item fields are logged as empty values."""
+
+    async def scenario() -> None:
+        """Run a minimal item that omits summary, source, content, and url."""
+        item = NewsItem(symbols=(), author="Benzinga Newsdesk", headline="Apple announces a phone")
+
+        async def handler(_request: httpx2.Request) -> httpx2.Response:
+            """Accept the webhook request for the minimal item."""
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a stream containing only the minimal item."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield the minimal item once."""
+                yield item
+
+            return events()
+
+        output = StringIO()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(output), connect_news)
+
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        receipts = [record for record in records if record["msg"] == "received news item"]
+        expected_receipt = {
+            "headline": "Apple announces a phone",
+            "summary": "",
+            "source": "",
+            "content": "",
+            "url": "",
+            "symbols": [],
+        }
+        assert len(receipts) == 1
+        assert {key: receipts[0][key] for key in expected_receipt} == expected_receipt
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("symbols", "headline", "route", "title", "ticker"),
     [
