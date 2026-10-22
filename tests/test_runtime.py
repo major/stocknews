@@ -15,31 +15,15 @@ from httpx2.websockets import ASGIWebSocketTransport
 
 from stocknews.__main__ import run_application
 from stocknews.logging import JSONFormatter, configure_logging
-from stocknews.models import Config, NewsItem, Trade
+from stocknews.models import Config, NewsItem
 from stocknews.runtime import _settle_task, run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
 _DUMMY_ALPACA_CREDENTIALS = ("key", "secret")
 _DUMMY_ALPACA_API_KEY, _DUMMY_ALPACA_API_SECRET = _DUMMY_ALPACA_CREDENTIALS
-_EXPECTED_ALPACA_STREAM_NAMES = frozenset({"news", "stock"})
 type ASGIReceive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 type ASGISend = Callable[[MutableMapping[str, Any]], Awaitable[None]]
-
-
-class _RoutedTransport(httpx2.AsyncBaseTransport):
-    def __init__(self, routes: dict[str, httpx2.AsyncBaseTransport]) -> None:
-        self._routes = routes
-
-    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        transport = self._routes.get(request.url.host)
-        if transport is None:
-            unexpected_host_message = f"unexpected request host: {request.url.host}"
-            raise AssertionError(unexpected_host_message)
-        return await transport.handle_async_request(request)
-
-    async def aclose(self) -> None:
-        pass
 
 
 class _ShutdownNewsASGIApp:
@@ -97,83 +81,21 @@ class _ShutdownDiscordHandler:
         return httpx2.Response(204)
 
 
-class _StockConnectASGIApp:
-    def __init__(self, reject_stock_auth: bool) -> None:
-        self.reject_stock_auth = reject_stock_auth
-        self.stock_auth_started = asyncio.Event()
-        self.release_stock_auth = asyncio.Event()
-        self.stock_subscribed = asyncio.Event()
-        self.news_subscribed = asyncio.Event()
-        self.news_disconnected = asyncio.Event()
-        self.stock_disconnected = asyncio.Event()
-
-    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
-        path = scope.get("path")
-        assert isinstance(path, str)
-        is_news = path.endswith("/news")
-        await receive()
-        await send({"type": "websocket.accept"})
-        while True:
-            incoming = await receive()
-            if incoming.get("type") == "websocket.disconnect":
-                (self.news_disconnected if is_news else self.stock_disconnected).set()
-                return
-            text = incoming.get("text")
-            assert isinstance(text, str)
-            request = json.loads(text)
-            if request["action"] == "auth":
-                if not is_news:
-                    self.stock_auth_started.set()
-                    if self.reject_stock_auth:
-                        await _send_websocket_json(
-                            send,
-                            {"T": "error", "code": 401, "msg": "invalid private-api-key and private-secret"},
-                        )
-                        continue
-                    await self.release_stock_auth.wait()
-                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                continue
-
-            if is_news:
-                await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
-                await _send_websocket_json(
-                    send,
-                    {
-                        "T": "n",
-                        "symbols": ["AAPL"],
-                        "author": "Benzinga Newsdesk",
-                        "headline": "Apple launches a phone",
-                    },
-                )
-                self.news_subscribed.set()
-            else:
-                await _send_websocket_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
-                self.stock_subscribed.set()
-
-
-class _EstablishedStreamFailureASGIApp:
-    def __init__(self, failed_stream: str, terminal_timing: str) -> None:
-        self.failed_stream = failed_stream
+class _EstablishedNewsFailureASGIApp:
+    def __init__(self, terminal_timing: str) -> None:
         self.terminal_timing = terminal_timing
-        self.subscribed_streams: set[str] = set()
-        self.both_subscribed = asyncio.Event()
+        self.subscribed = asyncio.Event()
         self.report_terminal_error = asyncio.Event()
-        self.disconnected_streams: set[str] = set()
-        self.both_disconnected = asyncio.Event()
+        self.disconnected = asyncio.Event()
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
-        path = scope.get("path")
-        assert isinstance(path, str)
-        stream_name = "news" if path.endswith("/news") else "stock"
-        channel = "news" if stream_name == "news" else "trades"
+        assert scope.get("path") == "/v1beta1/news"
         await receive()
         await send({"type": "websocket.accept"})
         while True:
             incoming = await receive()
             if incoming.get("type") == "websocket.disconnect":
-                self.disconnected_streams.add(stream_name)
-                if self.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES:
-                    self.both_disconnected.set()
+                self.disconnected.set()
                 return
             text = incoming.get("text")
             assert isinstance(text, str)
@@ -181,19 +103,16 @@ class _EstablishedStreamFailureASGIApp:
             if request["action"] == "auth":
                 await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
                 continue
-            subscriptions = ["*"] if channel == "news" else ["SPY", "QQQ"]
-            subscription = {"T": "subscription", channel: subscriptions}
-            if stream_name == self.failed_stream and self.terminal_timing == "before-consumer":
+            subscription = {"T": "subscription", "news": ["*"]}
+            if self.terminal_timing == "before-consumer":
                 await _send_websocket_json(
                     send,
                     [subscription, {"T": "error", "code": 403, "msg": "request rejected using private-api-key"}],
                 )
             else:
                 await _send_websocket_json(send, subscription)
-            self.subscribed_streams.add(stream_name)
-            if self.subscribed_streams == _EXPECTED_ALPACA_STREAM_NAMES:
-                self.both_subscribed.set()
-            if stream_name == self.failed_stream and self.terminal_timing == "late":
+            self.subscribed.set()
+            if self.terminal_timing == "late":
                 await self.report_terminal_error.wait()
                 await _send_websocket_json(
                     send,
@@ -201,34 +120,25 @@ class _EstablishedStreamFailureASGIApp:
                 )
 
 
-class _CancellationASGIApp:
+class _NewsCancellationASGIApp:
     def __init__(self) -> None:
-        self.disconnected_streams: set[str] = set()
-        self.all_disconnected = asyncio.Event()
-        self.stock_subscribed = asyncio.Event()
+        self.disconnected = asyncio.Event()
+        self.subscribed = asyncio.Event()
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
-        path = scope.get("path")
-        assert isinstance(path, str)
-        stream_name = "news" if path.endswith("/news") else "stock"
+        assert scope.get("path") == "/v1beta1/news"
         await receive()
         await send({"type": "websocket.accept"})
         while True:
             incoming = await receive()
             if incoming.get("type") == "websocket.disconnect":
-                self.disconnected_streams.add(stream_name)
-                if self.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES:
-                    self.all_disconnected.set()
+                self.disconnected.set()
                 return
             text = incoming.get("text")
             assert isinstance(text, str)
             request = json.loads(text)
             if request["action"] == "auth":
                 await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                continue
-            if stream_name == "stock":
-                await _send_websocket_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
-                self.stock_subscribed.set()
                 continue
             await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
             for headline, author in (
@@ -240,6 +150,7 @@ class _CancellationASGIApp:
                     send,
                     {"T": "n", "symbols": ["AAPL"], "author": author, "headline": headline},
                 )
+            self.subscribed.set()
 
 
 class _CancellationDiscordHandler:
@@ -331,7 +242,6 @@ def _config() -> Config:
         alpaca_api_key=_DUMMY_ALPACA_API_KEY,
         alpaca_api_secret=_DUMMY_ALPACA_API_SECRET,
         alpaca_news_stream_url="wss://news.test",
-        alpaca_stock_stream_url="wss://stocks.test",
         discord_analyst_webhooks=("https://discord.test/analyst",),
         discord_earnings_webhooks=("https://discord.test/earnings",),
         discord_news_webhooks=("https://discord.test/news",),
@@ -405,72 +315,6 @@ def _payload_title(payload: object) -> str:
     title = embed["title"]
     assert isinstance(title, str)
     return title
-
-
-class _StockEofScenario:
-    """Coordinate a queued news delivery and the final stock trade."""
-
-    def __init__(self) -> None:
-        """Initialize synchronization events and captured webhook output."""
-        self.request_started = asyncio.Event()
-        self.release_request = asyncio.Event()
-        self.news_iterator_closed = asyncio.Event()
-        self.delivered: list[dict[str, object]] = []
-        self.expected_spy_trade_price = 500.25
-
-    async def handle_webhook(self, request: httpx2.Request) -> httpx2.Response:
-        """Hold Discord delivery until the stock EOF assertion is ready.
-
-        Args:
-            request: The webhook request made by the runtime.
-
-        Returns:
-            A successful response after the request is released.
-        """
-        self.request_started.set()
-        await self.release_request.wait()
-        self.delivered.append(json.loads(request.content))
-        return httpx2.Response(204)
-
-    async def connect_news(self) -> AsyncIterable[NewsItem]:
-        """Return news that stays open until runtime cleanup.
-
-        Returns:
-            A news stream with one item and observable cleanup.
-        """
-
-        async def events() -> AsyncGenerator[NewsItem]:
-            try:
-                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
-                await asyncio.Event().wait()
-            finally:
-                self.news_iterator_closed.set()
-
-        return events()
-
-    async def connect_stock(self) -> AsyncIterable[Trade]:
-        """Return one trade after the news webhook starts.
-
-        Returns:
-            A stock stream that reaches EOF after its final trade.
-        """
-        scenario = self
-
-        class StockStream:
-            def __init__(self) -> None:
-                self._yielded = False
-
-            def __aiter__(self) -> AsyncIterator[Trade]:
-                return self
-
-            async def __anext__(self) -> Trade:
-                if self._yielded:
-                    raise StopAsyncIteration
-                await scenario.request_started.wait()
-                self._yielded = True
-                return Trade(symbol="SPY", price=scenario.expected_spy_trade_price, size=100)
-
-        return StockStream()
 
 
 class _IteratorCloseCancellationScenario:
@@ -555,6 +399,11 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
         items = (
             NewsItem(
                 symbols=("AAPL",),
+                author="",
+                headline="Fiscal.ai reports Apple product news",
+            ),
+            NewsItem(
+                symbols=("AAPL",),
                 author="Benzinga Newsdesk",
                 headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
             ),
@@ -595,6 +444,9 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
             if record["msg"] == "sent Discord webhook"
         ]
         assert sent_logs == [("earnings", "AAPL", 1), ("analyst", "AAPL", 1), ("news", "AAPL", 1)]
+        skipped_logs = [record for record in records if record["msg"] == "skipping news item"]
+        assert [record["reason"] for record in skipped_logs] == ["unapproved_author", "no_payload"]
+        assert set(sent) == {"/earnings", "/analyst", "/news"}
         assert sent == {
             "/earnings": {
                 "embeds": [
@@ -644,7 +496,6 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
         config = replace(
             _config(),
             alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-            alpaca_stock_stream_url="ws://stocks.alpaca.test/v2",
             discord_news_webhooks=("https://discord.test/api/webhooks/123/private-token",),
         )
         stop_event = asyncio.Event()
@@ -655,9 +506,7 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
             }
             async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
                 existing_tasks = asyncio.all_tasks()
-                application = asyncio.create_task(
-                    run_application(config, client, _logger(StringIO()), stop_event, stock_starter=None)
-                )
+                application = asyncio.create_task(run_application(config, client, _logger(StringIO()), stop_event))
                 await asyncio.wait_for(discord_handler.delivered.wait(), timeout=2)
                 await asyncio.wait_for(alpaca_app.connected.wait(), timeout=2)
                 if shutdown_mode == "cancel":
@@ -685,83 +534,16 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("reject_stock_auth", [False, True], ids=["delayed-auth", "initial-auth-failure"])
-def test_real_adapters_keep_news_running_during_stock_connect(reject_stock_auth: bool) -> None:
-    """Verify news continues while the stock stream connects or fails auth."""
-
-    async def scenario() -> None:
-        alpaca_app = _StockConnectASGIApp(reject_stock_auth)
-        discord_delivered = asyncio.Event()
-        stock_failure_logged = asyncio.Event()
-        requests: list[dict[str, object]] = []
-        logs = StringIO()
-        logger = _logger(logs)
-        logger.addHandler(_LogMessageEvent("failed to connect Alpaca stock stream", stock_failure_logged))
-
-        async def discord_handler(request: httpx2.Request) -> httpx2.Response:
-            requests.append(json.loads(request.content))
-            discord_delivered.set()
-            return httpx2.Response(204)
-
-        config = replace(
-            _config(),
-            alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-            alpaca_stock_stream_url="ws://stocks.alpaca.test/v2",
-            discord_news_webhooks=("https://discord.test/api/webhooks/news/token",),
-        )
-        stop_event = asyncio.Event()
-        async with (
-            ASGIWebSocketTransport(alpaca_app) as news_transport,
-            ASGIWebSocketTransport(alpaca_app) as stock_transport,
-        ):
-            routes = {
-                "news.alpaca.test": news_transport,
-                "stocks.alpaca.test": stock_transport,
-                "discord.test": httpx2.MockTransport(discord_handler),
-            }
-            async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
-                application = asyncio.create_task(run_application(config, client, logger, stop_event))
-                try:
-                    await asyncio.wait_for(alpaca_app.stock_auth_started.wait(), timeout=2)
-                    await asyncio.wait_for(discord_delivered.wait(), timeout=2)
-                    await asyncio.wait_for(alpaca_app.news_subscribed.wait(), timeout=2)
-                    if reject_stock_auth:
-                        await asyncio.wait_for(stock_failure_logged.wait(), timeout=2)
-                    else:
-                        assert not alpaca_app.stock_subscribed.is_set()
-                        alpaca_app.release_stock_auth.set()
-                        await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
-                    application.cancel()
-                    with pytest.raises(asyncio.CancelledError):
-                        await asyncio.wait_for(application, timeout=2)
-                    await asyncio.wait_for(alpaca_app.news_disconnected.wait(), timeout=2)
-                    await asyncio.wait_for(alpaca_app.stock_disconnected.wait(), timeout=2)
-                finally:
-                    if not application.done():
-                        application.cancel()
-                    await asyncio.gather(application, return_exceptions=True)
-
-        assert len(requests) == 1
-        assert "private-api-key" not in logs.getvalue()
-        assert "private-secret" not in logs.getvalue()
-        if reject_stock_auth:
-            assert "failed to connect Alpaca stock stream" in logs.getvalue()
-        else:
-            assert alpaca_app.stock_subscribed.is_set()
-
-    asyncio.run(scenario())
-
-
 @pytest.mark.parametrize(
-    ("failed_stream", "terminal_timing"),
-    [("news", "late"), ("stock", "late"), ("news", "before-consumer")],
-    ids=["news-late", "stock-late", "news-before-consumer"],
+    "terminal_timing",
+    ["late", "before-consumer"],
+    ids=["late", "before-consumer"],
 )
-def test_established_real_alpaca_stream_errors_fail_the_application(failed_stream: str, terminal_timing: str) -> None:
-    """Verify terminal errors from established streams fail the application."""
+def test_established_real_news_stream_errors_fail_the_application(terminal_timing: str) -> None:
+    """Verify terminal errors from the established news stream fail the application."""
 
     async def scenario() -> None:
-        alpaca_app = _EstablishedStreamFailureASGIApp(failed_stream, terminal_timing)
+        alpaca_app = _EstablishedNewsFailureASGIApp(terminal_timing)
         logs = StringIO()
 
         async def unused_discord_handler(_request: httpx2.Request) -> httpx2.Response:
@@ -771,47 +553,37 @@ def test_established_real_alpaca_stream_errors_fail_the_application(failed_strea
         config = replace(
             _config(),
             alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-            alpaca_stock_stream_url="ws://stocks.alpaca.test/v2",
         )
-        async with (
-            ASGIWebSocketTransport(alpaca_app) as news_transport,
-            ASGIWebSocketTransport(alpaca_app) as stock_transport,
-        ):
-            routes = {
-                "news.alpaca.test": news_transport,
-                "stocks.alpaca.test": stock_transport,
-                "discord.test": httpx2.MockTransport(unused_discord_handler),
+        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
+            mounts = {
+                "ws://news.alpaca.test": news_transport,
+                "https://discord.test": httpx2.MockTransport(unused_discord_handler),
             }
-            async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
+            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
                 application = asyncio.create_task(run_application(config, client, _logger(logs), asyncio.Event()))
                 try:
-                    await asyncio.wait_for(alpaca_app.both_subscribed.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.subscribed.wait(), timeout=2)
                     if terminal_timing == "late":
                         alpaca_app.report_terminal_error.set()
-                    runtime_name = "news" if failed_stream == "news" else "stock"
-                    with pytest.raises(
-                        RuntimeError,
-                        match=f"alpaca {runtime_name} stream terminated",
-                    ) as terminal:
+                    with pytest.raises(RuntimeError, match="alpaca news stream terminated") as terminal:
                         await asyncio.wait_for(application, timeout=2)
                     assert "private-api-key" not in str(terminal.value)
-                    await asyncio.wait_for(alpaca_app.both_disconnected.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
                 finally:
                     if not application.done():
                         application.cancel()
                     await asyncio.gather(application, return_exceptions=True)
 
-        assert alpaca_app.subscribed_streams == _EXPECTED_ALPACA_STREAM_NAMES
-        assert alpaca_app.disconnected_streams == _EXPECTED_ALPACA_STREAM_NAMES
+        assert alpaca_app.disconnected.is_set()
 
     asyncio.run(scenario())
 
 
-def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
-    """Verify cancellation closes both adapters and cancels delivery."""
+def test_real_news_cancellation_stops_adapter_and_cancels_delivery() -> None:
+    """Verify cancellation closes the news adapter and cancels delivery."""
 
     async def scenario() -> None:
-        alpaca_app = _CancellationASGIApp()
+        alpaca_app = _NewsCancellationASGIApp()
         discord_handler = _CancellationDiscordHandler()
         skipped_later_item = asyncio.Event()
         logs = StringIO()
@@ -821,29 +593,24 @@ def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
         config = replace(
             _config(),
             alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-            alpaca_stock_stream_url="ws://stocks.alpaca.test/v2",
             discord_news_webhooks=("https://discord.test/api/webhooks/news/private-token",),
         )
         stop_event = asyncio.Event()
-        async with (
-            ASGIWebSocketTransport(alpaca_app) as news_transport,
-            ASGIWebSocketTransport(alpaca_app) as stock_transport,
-        ):
-            routes = {
-                "news.alpaca.test": news_transport,
-                "stocks.alpaca.test": stock_transport,
-                "discord.test": httpx2.MockTransport(discord_handler),
+        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
+            mounts = {
+                "ws://news.alpaca.test": news_transport,
+                "https://discord.test": httpx2.MockTransport(discord_handler),
             }
-            async with httpx2.AsyncClient(transport=_RoutedTransport(routes), timeout=10) as client:
+            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
                 existing_tasks = asyncio.all_tasks()
                 application = asyncio.create_task(run_application(config, client, logger, stop_event))
                 try:
                     await asyncio.wait_for(discord_handler.first_request_started.wait(), timeout=2)
                     await asyncio.wait_for(skipped_later_item.wait(), timeout=2)
-                    await asyncio.wait_for(alpaca_app.stock_subscribed.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.subscribed.wait(), timeout=2)
                     stop_event.set()
                     application.cancel()
-                    await asyncio.wait_for(alpaca_app.all_disconnected.wait(), timeout=2)
+                    await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
                     discord_handler.release_request.set()
                     with pytest.raises(asyncio.CancelledError):
                         await asyncio.wait_for(application, timeout=2)
@@ -856,51 +623,9 @@ def test_real_stream_cancellation_stops_adapters_and_cancels_delivery() -> None:
                     await asyncio.gather(application, return_exceptions=True)
                     await _cancel_tasks_started_after(existing_tasks)
 
-        assert alpaca_app.disconnected_streams == {"news", "stock"}
+        assert alpaca_app.disconnected.is_set()
         assert discord_handler.requested_titles == []
         assert discord_handler.sender_cancelled.is_set()
-
-    asyncio.run(scenario())
-
-
-def test_stock_connection_failure_warns_while_news_continues() -> None:
-    """Verify a stock connection failure is logged while news is delivered."""
-
-    async def scenario() -> None:
-        stock_started = asyncio.Event()
-        output = StringIO()
-        sent: list[dict[str, object]] = []
-        stock_connection_error = "stock stream unavailable"
-
-        async def handler(request: httpx2.Request) -> httpx2.Response:
-            sent.append(json.loads(request.content))
-            return httpx2.Response(204)
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            stock_started.set()
-            raise ConnectionError(stock_connection_error)
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            await stock_started.wait()
-
-            async def events() -> AsyncIterable[NewsItem]:
-                yield NewsItem(
-                    symbols=("MSFT",),
-                    author="Benzinga Newsdesk",
-                    headline="Microsoft announces a new Surface",
-                )
-
-            return events()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            await run(_config(), client, _logger(output), connect_news, connect_stock)
-
-        records = [json.loads(line) for line in output.getvalue().splitlines()]
-        assert any(
-            record["msg"] == "failed to connect Alpaca stock stream" and record["error"] == stock_connection_error
-            for record in records
-        )
-        assert _payload_title(sent[0]) == "MSFT: Microsoft announces a new Surface"
 
     asyncio.run(scenario())
 
@@ -938,185 +663,6 @@ def test_settle_task_preserves_mixed_base_exception_group() -> None:
         assert error.value is mixed_error
         assert error.value.exceptions == (ordinary_error, cancellation_error)
         assert task.exception() is mixed_error
-
-    asyncio.run(scenario())
-
-
-def test_cancelled_stock_connection_preserves_original_message() -> None:
-    """Verify a cancelled stock connection propagates its cancellation reason."""
-
-    async def scenario() -> None:
-        cancellation_message = "stock connection stopped before connecting"
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncIterator[NewsItem]:
-                await asyncio.Event().wait()
-                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
-
-            return events()
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            raise asyncio.CancelledError(cancellation_message)
-
-        async with httpx2.AsyncClient() as client:
-            with pytest.raises(asyncio.CancelledError) as error:
-                await run(_config(), client, _logger(StringIO()), connect_news, connect_stock)
-
-        assert str(error.value) == cancellation_message
-
-    asyncio.run(scenario())
-
-
-def test_news_runs_while_stock_connection_is_pending() -> None:
-    """Verify news runs while the stock connection is pending."""
-
-    async def scenario() -> None:
-        stock_started = asyncio.Event()
-        stock_stopped = asyncio.Event()
-        release_stock = asyncio.Event()
-        sent: list[dict[str, object]] = []
-
-        async def handler(request: httpx2.Request) -> httpx2.Response:
-            sent.append(json.loads(request.content))
-            return httpx2.Response(204)
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            stock_started.set()
-            try:
-                await release_stock.wait()
-            finally:
-                stock_stopped.set()
-
-            async def events() -> AsyncIterable[Trade]:
-                yield Trade(symbol="SPY", price=0, size=0)
-
-            return events()
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            await stock_started.wait()
-
-            async def events() -> AsyncIterable[NewsItem]:
-                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
-
-            return events()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            await run(_config(), client, _logger(StringIO()), connect_news, connect_stock)
-
-        assert stock_stopped.is_set()
-        assert _payload_title(sent[0]) == "AAPL: Apple launches a phone"
-
-    asyncio.run(scenario())
-
-
-def test_established_stock_stream_failure_is_fatal_and_trade_is_logged() -> None:
-    """Verify an established stock stream failure is fatal and logs its trade."""
-
-    async def scenario() -> None:
-        output = StringIO()
-        never = asyncio.Event()
-        stock_failure_message = "stock stream stopped"
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncIterable[NewsItem]:
-                await never.wait()
-                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="unreachable")
-
-            return events()
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            async def events() -> AsyncIterable[Trade]:
-                yield Trade(
-                    symbol="SPY",
-                    price=500.25,
-                    size=100,
-                    exchange="V",
-                    timestamp="2026-09-21T14:30:00Z",
-                    conditions=("@", "F"),
-                    tape="C",
-                )
-                raise ConnectionError(stock_failure_message)
-
-            return events()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda request: httpx2.Response(204))) as client:
-            with pytest.raises(RuntimeError, match=f"alpaca stock stream terminated: {stock_failure_message}"):
-                await run(_config(), client, _logger(output), connect_news, connect_stock)
-
-        records = [json.loads(line) for line in output.getvalue().splitlines()]
-        trade_log = next(record for record in records if record["msg"] == "stock trade")
-        assert trade_log == {
-            "time": trade_log["time"],
-            "level": "INFO",
-            "msg": "stock trade",
-            "symbol": "SPY",
-            "price": 500.25,
-            "size": 100,
-            "exchange": "V",
-            "timestamp": "2026-09-21T14:30:00Z",
-            "conditions": ["@", "F"],
-            "tape": "C",
-        }
-
-    asyncio.run(scenario())
-
-
-def test_stream_failure_closes_an_iterator_suspended_after_its_last_read() -> None:
-    """Verify a stream failure closes an iterator suspended after its final item."""
-
-    async def scenario() -> None:
-        first_delivery_started = asyncio.Event()
-        second_news_yielded = asyncio.Event()
-        release_second_news = asyncio.Event()
-        news_iterator_closed = asyncio.Event()
-        news_iterators: list[AsyncGenerator[NewsItem]] = []
-        stock_failure_message = "stock stream stopped"
-
-        async def handler(_request: httpx2.Request) -> httpx2.Response:
-            first_delivery_started.set()
-            return httpx2.Response(204)
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            async def events() -> AsyncGenerator[NewsItem]:
-                try:
-                    yield NewsItem(
-                        symbols=("AAPL",),
-                        author="Benzinga Newsdesk",
-                        headline="Apple launches a phone",
-                    )
-                    await first_delivery_started.wait()
-                    second_news_yielded.set()
-                    yield NewsItem(
-                        symbols=("MSFT",),
-                        author="Benzinga Newsdesk",
-                        headline="Microsoft launches a tablet",
-                    )
-                    await release_second_news.wait()
-                finally:
-                    news_iterator_closed.set()
-
-            stream = events()
-            news_iterators.append(stream)
-            return stream
-
-        async def connect_stock() -> AsyncIterable[Trade]:
-            async def events() -> AsyncIterable[Trade]:
-                await second_news_yielded.wait()
-                if release_second_news.is_set():
-                    yield Trade(symbol="SPY", price=0, size=0)
-                    return
-                raise ConnectionError(stock_failure_message)
-
-            return events()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            with pytest.raises(RuntimeError, match=f"alpaca stock stream terminated: {stock_failure_message}"):
-                await run(_config(), client, _logger(StringIO()), connect_news, connect_stock)
-
-        try:
-            assert news_iterator_closed.is_set()
-        finally:
-            await news_iterators[0].aclose()
 
     asyncio.run(scenario())
 
@@ -1235,8 +781,9 @@ def test_webhook_logs_redact_urls_from_library_and_structured_records() -> None:
     assert "secret-tuple" not in log_output
 
 
-def test_normal_stream_completion_drains_queued_discord_deliveries() -> None:
-    """Verify normal stream completion waits for queued Discord deliveries."""
+@pytest.mark.parametrize("without_aclose", [False, True], ids=["async-generator", "iterator-without-aclose"])
+def test_normal_stream_completion_drains_queued_discord_deliveries(without_aclose: bool) -> None:
+    """Verify normal completion drains deliveries for both iterator protocols."""
 
     async def scenario() -> None:
         request_started = asyncio.Event()
@@ -1251,55 +798,58 @@ def test_normal_stream_completion_drains_queued_discord_deliveries() -> None:
             return httpx2.Response(204)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a normal async generator or an iterator wrapper without aclose."""
+
             async def events() -> AsyncIterable[NewsItem]:
                 yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
                 yield NewsItem(symbols=("MSFT",), author="Benzinga Newsdesk", headline="Microsoft launches a tablet")
                 stream_exhausted.set()
 
-            return events()
+            stream = events()
+            if without_aclose:
 
+                class NewsIteratorWithoutClose:
+                    """Expose only the asynchronous iterator protocol."""
+
+                    def __init__(self, iterator: AsyncIterator[NewsItem]) -> None:
+                        """Store the underlying exhausted async generator."""
+                        self._iterator = iterator
+
+                    def __aiter__(self) -> AsyncIterator[NewsItem]:
+                        """Return this wrapper as the news iterator."""
+                        return self
+
+                    async def __anext__(self) -> NewsItem:
+                        """Delegate the next news read to the underlying generator."""
+                        return await anext(self._iterator)
+
+                return NewsIteratorWithoutClose(stream)
+            return stream
+
+        output = StringIO()
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
-            await asyncio.wait_for(request_started.wait(), timeout=1)
-            await asyncio.wait_for(stream_exhausted.wait(), timeout=1)
-            assert not runtime.done()
-            release_request.set()
-            await asyncio.wait_for(runtime, timeout=1)
+            existing_tasks = asyncio.all_tasks()
+            runtime = asyncio.create_task(run(_config(), client, _logger(output), connect_news))
+            try:
+                await asyncio.wait_for(request_started.wait(), timeout=1)
+                await asyncio.wait_for(stream_exhausted.wait(), timeout=1)
+                assert not runtime.done()
+                release_request.set()
+                await asyncio.wait_for(runtime, timeout=1)
+            finally:
+                release_request.set()
+                if not runtime.done():
+                    runtime.cancel()
+                await asyncio.gather(runtime, return_exceptions=True)
+            pending_tasks = _tasks_started_after(existing_tasks)
+            assert not pending_tasks, f"unexpected tasks after stream completion: {pending_tasks!r}"
 
         assert {_payload_title(payload) for payload in delivered} == {
             "AAPL: Apple launches a phone",
             "MSFT: Microsoft launches a tablet",
         }
-
-    asyncio.run(scenario())
-
-
-def test_stock_stream_eof_logs_trade_and_drains_queued_delivery() -> None:
-    """Verify stock EOF logs its trade and drains queued news delivery."""
-
-    async def scenario() -> None:
-        output = StringIO()
-        streams = _StockEofScenario()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(streams.handle_webhook), timeout=10) as client:
-            runtime = asyncio.create_task(
-                run(_config(), client, _logger(output), streams.connect_news, streams.connect_stock)
-            )
-            try:
-                await asyncio.wait_for(streams.request_started.wait(), timeout=1)
-                await asyncio.wait_for(streams.news_iterator_closed.wait(), timeout=1)
-                assert not runtime.done()
-                streams.release_request.set()
-                await asyncio.wait_for(runtime, timeout=1)
-            finally:
-                streams.release_request.set()
-                if not runtime.done():
-                    runtime.cancel()
-                await asyncio.gather(runtime, return_exceptions=True)
-
-        trade_log = next(json.loads(line) for line in output.getvalue().splitlines() if '"msg":"stock trade"' in line)
-        assert trade_log["symbol"] == "SPY"
-        assert trade_log["price"] == streams.expected_spy_trade_price
-        assert _payload_title(streams.delivered[0]) == "AAPL: Apple launches a phone"
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert not [record for record in records if record["msg"] == "failed to close Alpaca news stream"]
 
     asyncio.run(scenario())
 
@@ -1622,33 +1172,62 @@ def test_repeated_cancellation_cancels_delivery_worker() -> None:
 
 
 def test_full_delivery_queue_fails_runtime_without_waiting() -> None:
-    """Verify a full delivery queue fails without waiting for the active request."""
+    """Verify queue overflow closes the suspended news iterator and cancels delivery."""
 
     async def scenario() -> None:
         request_started = asyncio.Event()
         release_request = asyncio.Event()
+        delivery_cancelled = asyncio.Event()
+        iterator_closed = asyncio.Event()
+        delivered: list[httpx2.Request] = []
 
-        async def handler(_request: httpx2.Request) -> httpx2.Response:
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Hold the active webhook until runtime cleanup cancels it."""
             request_started.set()
-            await release_request.wait()
+            try:
+                await release_request.wait()
+            except asyncio.CancelledError:
+                delivery_cancelled.set()
+                raise
+            delivered.append(request)
             return httpx2.Response(204)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return enough news to fill the bounded delivery queue."""
+
             async def events() -> AsyncIterable[NewsItem]:
-                yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
-                await request_started.wait()
-                for _ in range(17):
+                """Yield news until queue overflow closes this generator."""
+                try:
                     yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
+                    await request_started.wait()
+                    for _ in range(17):
+                        yield NewsItem(
+                            symbols=("AAPL",),
+                            author="Benzinga Newsdesk",
+                            headline="Apple launches a phone",
+                        )
+                finally:
+                    iterator_closed.set()
 
             return events()
 
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
             try:
                 with pytest.raises(RuntimeError, match="Discord delivery queue is full"):
                     await asyncio.wait_for(runtime, timeout=1)
+                assert iterator_closed.is_set()
+                assert delivery_cancelled.is_set()
+                assert delivered == []
+                pending_tasks = _tasks_started_after(existing_tasks)
+                assert not pending_tasks, f"unexpected tasks after queue overflow: {pending_tasks!r}"
             finally:
                 release_request.set()
+                if not runtime.done():
+                    runtime.cancel()
+                await asyncio.gather(runtime, return_exceptions=True)
+                await _cancel_tasks_started_after(existing_tasks)
 
     asyncio.run(scenario())
 
