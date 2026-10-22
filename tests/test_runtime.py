@@ -14,6 +14,7 @@ import pytest
 from httpx2.websockets import ASGIWebSocketTransport
 
 from stocknews.__main__ import run_application
+from stocknews.config import load_config
 from stocknews.logging import JSONFormatter, configure_logging
 from stocknews.models import Config, NewsItem
 from stocknews.runtime import _settle_task, run
@@ -1129,6 +1130,113 @@ def test_classified_news_without_payload_is_logged_and_not_delivered(headline: s
         assert len(skipped) == 1
         assert skipped[0]["reason"] == "no_payload"
         assert skipped[0]["kind"] == kind
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("disabled_categories", "expected_paths"),
+    [
+        (("earnings",), {"/analyst", "/news"}),
+        (("analyst",), {"/earnings", "/news"}),
+        (("news",), {"/earnings", "/analyst"}),
+        (("earnings", "analyst", "news"), set()),
+        ((), {"/earnings", "/analyst", "/news"}),
+    ],
+    ids=["earnings-disabled", "analyst-disabled", "news-disabled", "all-disabled", "defaults-enabled"],
+)
+def test_disabled_categories_are_skipped_without_fallback(
+    disabled_categories: tuple[str, ...],
+    expected_paths: set[str],
+) -> None:
+    """Verify disabled categories skip their own deliveries without rerouting."""
+
+    async def scenario() -> None:
+        requested_paths: list[str] = []
+        output = StringIO()
+        environ = {
+            "ALPACA_API_KEY": _DUMMY_ALPACA_API_KEY,
+            "ALPACA_API_SECRET": _DUMMY_ALPACA_API_SECRET,
+            "DISCORD_EARNINGS_WEBHOOKS": "https://discord.test/earnings",
+            "DISCORD_ANALYST_WEBHOOKS": "https://discord.test/analyst",
+            "DISCORD_NEWS_WEBHOOKS": "https://discord.test/news",
+            "BLOCKED_PHRASES": "",
+        }
+        for category in disabled_categories:
+            environ[f"DISCORD_{category.upper()}_ENABLED"] = "false"
+        config = load_config(environ)
+        items = (
+            NewsItem(
+                symbols=("AAPL",),
+                author="Benzinga Newsdesk",
+                headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+            ),
+            NewsItem(
+                symbols=("AAPL",),
+                author="Benzinga Newsdesk",
+                headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+            ),
+            NewsItem(
+                symbols=(" AAPL ",),
+                author="Benzinga Newsdesk",
+                headline="Apple &amp; launches a new iPhone",
+                summary="Company announcement",
+                url="https://example.test/news",
+            ),
+        )
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Record the category endpoint and accept the webhook request."""
+            requested_paths.append(request.url.path)
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return the three real category examples as a news stream."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield one item for each runtime delivery category."""
+                for item in items:
+                    yield item
+
+            return events()
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(config, client, _logger(output), connect_news)
+
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        skipped = [record for record in records if record["msg"] == "skipping news item"]
+        sent = [record for record in records if record["msg"] == "sent Discord webhook"]
+        skip_details = {
+            "earnings": {
+                "headline": "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+                "symbols": ["AAPL"],
+            },
+            "analyst": {
+                "headline": "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+                "symbols": ["AAPL"],
+            },
+            "news": {"headline": "Apple & launches a new iPhone", "symbols": [" AAPL "]},
+        }
+        expected_skips = [
+            {
+                "reason": "category_disabled",
+                "kind": category,
+                **skip_details[category],
+                "author": "Benzinga Newsdesk",
+            }
+            for category in ("earnings", "analyst", "news")
+            if category in disabled_categories
+        ]
+
+        assert set(requested_paths) == expected_paths
+        assert [record["kind"] for record in sent] == [
+            category for category in ("earnings", "analyst", "news") if category not in disabled_categories
+        ]
+        assert [
+            {field: record[field] for field in expected}
+            for record, expected in zip(skipped, expected_skips, strict=True)
+        ] == expected_skips
+        assert not {record["kind"] for record in sent} & set(disabled_categories)
 
     asyncio.run(scenario())
 

@@ -24,6 +24,9 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     assert settings.discord_analyst_webhooks == ("a", "b")
     assert settings.discord_earnings_webhooks == ("c",)
     assert settings.discord_news_webhooks == ("d", "e")
+    assert settings.discord_analyst_enabled is True
+    assert settings.discord_earnings_enabled is True
+    assert settings.discord_news_enabled is True
     assert settings.blocked_phrases == ("spam", "eggs")
 
 
@@ -32,6 +35,81 @@ def test_config_defaults_to_original_blocked_phrases() -> None:
     settings = load_config({"ALPACA_API_KEY": "key", "ALPACA_API_SECRET": "secret"})
 
     assert settings.blocked_phrases == ("if you invested", "you would have", "would be worth")
+
+
+@pytest.mark.parametrize(
+    ("env_key", "field_name"),
+    [
+        ("DISCORD_ANALYST_ENABLED", "discord_analyst_enabled"),
+        ("DISCORD_EARNINGS_ENABLED", "discord_earnings_enabled"),
+        ("DISCORD_NEWS_ENABLED", "discord_news_enabled"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("true", True),
+        (" TRUE ", True),
+        ("1", True),
+        ("yes", True),
+        ("On", True),
+        ("false", False),
+        (" FALSE ", False),
+        ("0", False),
+        ("no", False),
+        ("OFF", False),
+    ],
+)
+def test_config_parses_discord_enabled_settings_independently(
+    env_key: str,
+    field_name: str,
+    value: str,
+    expected: bool,
+) -> None:
+    """Parse each Discord category toggle without changing the other defaults."""
+    settings = load_config(
+        {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_API_SECRET": "secret",
+            env_key: value,
+        }
+    )
+
+    assert getattr(settings, field_name) is expected
+    assert all(
+        getattr(settings, other_field) is True
+        for other_field in (
+            "discord_analyst_enabled",
+            "discord_earnings_enabled",
+            "discord_news_enabled",
+        )
+        if other_field != field_name
+    )
+
+
+@pytest.mark.parametrize(
+    "env_key",
+    [
+        "DISCORD_ANALYST_ENABLED",
+        "DISCORD_EARNINGS_ENABLED",
+        "DISCORD_NEWS_ENABLED",
+    ],
+)
+@pytest.mark.parametrize("value", ["", "  ", "sometimes", "true-ish"])
+def test_config_rejects_invalid_discord_enabled_settings(env_key: str, value: str) -> None:
+    """Reject invalid toggle values without including the value in the error."""
+    environ = {
+        "ALPACA_API_KEY": "key",
+        "ALPACA_API_SECRET": "secret",
+        env_key: value,
+    }
+
+    with pytest.raises(ValueError, match=env_key) as error:
+        load_config(environ)
+
+    assert str(error.value) == f"{env_key} must be a boolean"
+    if value:
+        assert value not in str(error.value)
 
 
 def test_config_preserves_explicitly_empty_optional_values() -> None:
