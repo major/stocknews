@@ -7,7 +7,6 @@ from stocknews.earnings import (
     company_name,
     describe_earnings,
     extract_earnings,
-    has_blocked_phrases,
     is_earnings_news,
 )
 
@@ -67,9 +66,3 @@ def test_earnings_description_sorts_fields_and_company_name_is_a_prefix() -> Non
     assert describe_earnings(headline) == "💔 Sales: $50B vs. $48B est.\n💚 EPS: $2.00 vs. $1.80 est."
     assert beat_emoji(True) == "💚"
     assert beat_emoji(False) == "💔"
-
-
-def test_blocked_phrases_ignore_case() -> None:
-    """Match configured blocked phrases without regard to case."""
-    assert has_blocked_phrases("This would be WORTH it", ("would be worth",))
-    assert not has_blocked_phrases("This is normal", ("spam", "scam"))

@@ -4,7 +4,7 @@ from html import unescape
 from typing import TYPE_CHECKING, Literal
 
 from stocknews.analyst import parse_analyst
-from stocknews.earnings import has_blocked_phrases, is_earnings_news
+from stocknews.earnings import is_earnings_news
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -15,23 +15,18 @@ NewsClassification = Literal[
     "earnings",
     "analyst",
     "news",
-    "blocked_phrase",
-    "symbol_count",
-    "empty_symbol",
     "non_us_exchange",
     "unapproved_author",
 ]
 
 
-def classify_news(item: NewsItem, blocked_phrases: Sequence[str]) -> NewsClassification:
-    """Return a category or first skip reason, matching the original filter order."""
+def classify_news(item: NewsItem) -> NewsClassification:
+    """Return the category or first rejection reason for a news item."""
     headline = unescape(item.headline)
-    if has_blocked_phrases(headline, blocked_phrases):
-        return "blocked_phrase"
-
-    symbol_rejection = _symbol_eligibility_rejection(item.symbols)
-    if symbol_rejection is not None:
-        return symbol_rejection
+    normalized_symbols = us_symbols(item.symbols)
+    has_nonblank_symbol = any(symbol.strip() for symbol in item.symbols)
+    if has_nonblank_symbol and not normalized_symbols:
+        return "non_us_exchange"
     if item.author != "Benzinga Newsdesk":
         return "unapproved_author"
 
@@ -43,15 +38,11 @@ def classify_news(item: NewsItem, blocked_phrases: Sequence[str]) -> NewsClassif
     return "news"
 
 
-def _symbol_eligibility_rejection(
-    symbols: Sequence[str],
-) -> Literal["symbol_count", "empty_symbol", "non_us_exchange"] | None:
-    """Return the first rejection for symbol count, content, or exchange."""
-    if len(symbols) != 1:
-        return "symbol_count"
-    symbol = symbols[0].strip()
-    if not symbol:
-        return "empty_symbol"
-    if ":" in symbol:
-        return "non_us_exchange"
-    return None
+def us_symbols(symbols: Sequence[str]) -> tuple[str, ...]:
+    """Return trimmed symbols that are nonblank and not exchange-qualified."""
+    normalized: list[str] = []
+    for symbol in symbols:
+        trimmed = symbol.strip()
+        if trimmed and ":" not in trimmed:
+            normalized.append(trimmed)
+    return tuple(normalized)

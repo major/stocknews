@@ -14,7 +14,6 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
             "DISCORD_ANALYST_WEBHOOKS": "a, b,, ",
             "DISCORD_EARNINGS_WEBHOOKS": "c",
             "DISCORD_NEWS_WEBHOOKS": "d,e",
-            "BLOCKED_PHRASES": "spam, eggs",
         }
     )
 
@@ -27,14 +26,6 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     assert settings.discord_analyst_enabled is True
     assert settings.discord_earnings_enabled is True
     assert settings.discord_news_enabled is True
-    assert settings.blocked_phrases == ("spam", "eggs")
-
-
-def test_config_defaults_to_original_blocked_phrases() -> None:
-    """Use the built-in blocked phrases when none are configured."""
-    settings = load_config({"ALPACA_API_KEY": "key", "ALPACA_API_SECRET": "secret"})
-
-    assert settings.blocked_phrases == ("if you invested", "you would have", "would be worth")
 
 
 @pytest.mark.parametrize(
@@ -121,7 +112,6 @@ def test_config_preserves_explicitly_empty_optional_values() -> None:
             "ALPACA_NEWS_STREAM_URL": "",
             "STOCK_LOGO": "",
             "TRANSPARENT_PNG": "",
-            "BLOCKED_PHRASES": "",
         }
     )
 
@@ -129,7 +119,6 @@ def test_config_preserves_explicitly_empty_optional_values() -> None:
     assert settings.alpaca_news_stream_url == ""
     assert settings.stock_logo == ""
     assert settings.transparent_png == ""
-    assert settings.blocked_phrases == ()
 
 
 @pytest.mark.parametrize(

@@ -25,11 +25,11 @@ Read only what you need:
   `ALPACA_NEWS_STREAM_URL`, `DISCORD_ANALYST_ENABLED`,
   `DISCORD_ANALYST_WEBHOOKS`, `DISCORD_EARNINGS_ENABLED`,
   `DISCORD_EARNINGS_WEBHOOKS`, `DISCORD_NEWS_ENABLED`,
-  `DISCORD_NEWS_WEBHOOKS`, `STOCK_LOGO`, `TRANSPARENT_PNG`, and
-  `BLOCKED_PHRASES`. The three category-enabled settings default to true and
+  `DISCORD_NEWS_WEBHOOKS`, `STOCK_LOGO`, and `TRANSPARENT_PNG`.
+  The three category-enabled settings default to true and
   accept true/false, 1/0, yes/no, and on/off, case-insensitive with surrounding
   whitespace ignored. An explicitly empty or invalid value raises `ValueError`
-  at startup. Discord webhook lists and blocked phrases are comma-separated.
+  at startup. Discord webhook lists are comma-separated.
 - Keep source in `src/stocknews/` and tests in `tests/`.
 - Use sociable tests with real internal code. Replace only external or nondeterministic boundaries.
 - Pytest blocks sockets by default. Allow loopback access only for tests that need local servers.

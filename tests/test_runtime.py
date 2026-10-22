@@ -248,7 +248,6 @@ def _config() -> Config:
         discord_news_webhooks=("https://discord.test/news",),
         stock_logo=_STOCK_LOGO,
         transparent_png=_TRANSPARENT_PNG,
-        blocked_phrases=("would be worth",),
     )
 
 
@@ -473,15 +472,126 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
             "/news": {
                 "embeds": [
                     {
-                        "title": " AAPL : Apple &amp; launches a new iPhone",
+                        "title": "AAPL: Apple &amp; launches a new iPhone",
                         "description": "Company announcement",
                         "url": "https://example.test/news",
                         "image": {"url": _TRANSPARENT_PNG},
-                        "thumbnail": {"url": "https://static.stocktitan.net/company-logo/ aapl .webp"},
+                        "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                     }
                 ]
             },
         }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("symbols", "headline", "route", "title", "ticker"),
+    [
+        ((), "Apple Q1 EPS $2.00 beat $1.80 Estimate", "/earnings", "Apple", ""),
+        (
+            ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
+            "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+            "/earnings",
+            "AAPL: Apple",
+            "AAPL",
+        ),
+        ((), "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223", "/analyst", "💚 Apple $223.00", ""),
+        (
+            ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
+            "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+            "/analyst",
+            "💚 AAPL: Apple $223.00",
+            "AAPL",
+        ),
+        ((), "Apple announces a phone", "/news", "Apple announces a phone", ""),
+        ((" ", "\t"), "Apple shares a blank ticker update", "/news", "Apple shares a blank ticker update", ""),
+        ((" AAPL ", "MSFT"), "Apple launches a phone", "/news", "AAPL: Apple launches a phone", "AAPL"),
+        (
+            ("NASDAQ:NVDA", " MSFT "),
+            "Microsoft launches a tablet",
+            "/news",
+            "MSFT: Microsoft launches a tablet",
+            "MSFT",
+        ),
+        (
+            (" MSFT ", "NASDAQ:NVDA"),
+            "Microsoft reports another update",
+            "/news",
+            "MSFT: Microsoft reports another update",
+            "MSFT",
+        ),
+        (
+            (" AAPL ",),
+            "Apple says this would be worth reading",
+            "/news",
+            "AAPL: Apple says this would be worth reading",
+            "AAPL",
+        ),
+        (("NASDAQ:NVDA", "NYSE:IBM"), "Foreign listings should be skipped", None, None, None),
+    ],
+    ids=[
+        "earnings-no-symbols",
+        "earnings-mixed-symbols",
+        "analyst-no-symbols",
+        "analyst-mixed-symbols",
+        "news-no-symbols",
+        "news-blank-symbols",
+        "news-us-multiple",
+        "news-foreign-first",
+        "news-us-first",
+        "former-blocked-phrase",
+        "foreign-only",
+    ],
+)
+def test_runtime_normalizes_symbols_before_building_category_payloads(
+    symbols: tuple[str, ...],
+    headline: str,
+    route: str | None,
+    title: str | None,
+    ticker: str | None,
+) -> None:
+    """Route each item through run and verify normalized ticker output."""
+
+    async def scenario() -> None:
+        """Send one parameterized news item through the real runtime pipeline."""
+        requested: list[tuple[str, dict[str, object]]] = []
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Record a webhook request and return success."""
+            requested.append((request.url.path, json.loads(request.content)))
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a stream containing the parameterized news item."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield the single test item."""
+                yield NewsItem(symbols=symbols, author="Benzinga Newsdesk", headline=headline)
+
+            return events()
+
+        output = StringIO()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(output), connect_news)
+
+        if route is None:
+            assert requested == []
+            skips = [json.loads(line) for line in output.getvalue().splitlines()]
+            assert [record["reason"] for record in skips if record["msg"] == "skipping news item"] == [
+                "non_us_exchange"
+            ]
+            return
+
+        assert len(requested) == 1
+        requested_route, payload = requested[0]
+        assert requested_route == route
+        embed = payload["embeds"][0]
+        assert embed["title"] == title
+        thumbnail = embed["thumbnail"]["url"]
+        expected_thumbnail = _STOCK_LOGO.replace("%s", ticker.lower()) if ticker else _TRANSPARENT_PNG
+        assert thumbnail == expected_thumbnail
+        assert all(symbol not in f"{title}{thumbnail}" for symbol in symbols if ":" in symbol)
 
     asyncio.run(scenario())
 
@@ -530,7 +640,7 @@ def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(sh
 
         assert alpaca_app.connected.is_set()
         assert alpaca_app.disconnected.is_set()
-        assert _payload_title(discord_handler.received_payloads[0]) == " AAPL : Apple &amp; launches a phone"
+        assert _payload_title(discord_handler.received_payloads[0]) == "AAPL: Apple &amp; launches a phone"
 
     asyncio.run(scenario())
 
@@ -1160,7 +1270,6 @@ def test_disabled_categories_are_skipped_without_fallback(
             "DISCORD_EARNINGS_WEBHOOKS": "https://discord.test/earnings",
             "DISCORD_ANALYST_WEBHOOKS": "https://discord.test/analyst",
             "DISCORD_NEWS_WEBHOOKS": "https://discord.test/news",
-            "BLOCKED_PHRASES": "",
         }
         for category in disabled_categories:
             environ[f"DISCORD_{category.upper()}_ENABLED"] = "false"

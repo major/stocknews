@@ -41,7 +41,6 @@ class Config:
     discord_news_webhooks: tuple[str, ...]
     stock_logo: str
     transparent_png: str
-    blocked_phrases: tuple[str, ...]
     discord_analyst_enabled: bool = True
     discord_earnings_enabled: bool = True
     discord_news_enabled: bool = True

@@ -13,7 +13,7 @@ from stocknews.discord import (
     news_payload,
     send_payload,
 )
-from stocknews.news import classify_news
+from stocknews.news import classify_news, us_symbols
 
 if TYPE_CHECKING:
     import logging
@@ -66,7 +66,7 @@ async def _next[T](stream: AsyncIterator[T]) -> T | _StreamEnded:
 
 def _make_delivery(item: NewsItem, config: Config, logger: logging.Logger) -> _Delivery | None:
     """Classify a news item and build its enabled Discord delivery, if any."""
-    classification = classify_news(item, config.blocked_phrases)
+    classification = classify_news(item)
     if classification not in {"earnings", "analyst", "news"}:
         logger.info(
             "skipping news item",
@@ -97,8 +97,9 @@ def _make_delivery(item: NewsItem, config: Config, logger: logging.Logger) -> _D
         )
         return None
 
-    symbol = item.symbols[0].strip()
-    headline = unescape(item.headline)
+    item = replace(item, symbols=us_symbols(item.symbols), headline=unescape(item.headline))
+    symbol = item.symbols[0] if item.symbols else ""
+    headline = item.headline
     if classification == "earnings":
         payload = earnings_payload(symbol, headline, config.stock_logo, config.transparent_png)
         webhooks = config.discord_earnings_webhooks
@@ -106,8 +107,7 @@ def _make_delivery(item: NewsItem, config: Config, logger: logging.Logger) -> _D
         payload = analyst_payload(symbol, headline, config.stock_logo, config.transparent_png)
         webhooks = config.discord_analyst_webhooks
     else:
-        # General-news formatting uses the original symbol, matching the Go runtime.
-        payload = news_payload(replace(item, headline=headline), config.stock_logo, config.transparent_png)
+        payload = news_payload(item, config.stock_logo, config.transparent_png)
         webhooks = config.discord_news_webhooks
 
     if payload is None:

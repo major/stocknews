@@ -55,7 +55,8 @@ def earnings_payload(
     if not description:
         return None
 
-    embed = _new_embed(f"{symbol}: {company_name(headline)}", stock_logo, symbol, transparent_png)
+    title = f"{symbol}: {company_name(headline)}" if symbol else company_name(headline) or headline
+    embed = _new_embed(title, stock_logo, symbol, transparent_png)
     embed["description"] = description
     return {"embeds": [embed]}
 
@@ -79,8 +80,10 @@ def analyst_payload(
     else:
         emoji, color = "❓", 0
 
+    ticker_prefix = f"{symbol}: " if symbol else ""
+    title = f"{emoji} {ticker_prefix}{report.stock} ${report.price_target:.2f}"
     embed = _new_embed(
-        f"{emoji} {symbol}: {report.stock} ${report.price_target:.2f}",
+        title,
         stock_logo,
         symbol,
         transparent_png,
@@ -95,13 +98,11 @@ def news_payload(
     item: NewsItem,
     stock_logo: str,
     transparent_png: str,
-) -> WebhookPayload | None:
-    """Build a general-news payload, or return None when no symbol is present."""
-    if not item.symbols:
-        return None
-
-    symbol = item.symbols[0]
-    embed = _new_embed(f"{symbol}: {item.headline}", stock_logo, symbol, transparent_png)
+) -> WebhookPayload:
+    """Build a general-news payload using its first symbol when available."""
+    symbol = next(iter(item.symbols), "")
+    title = f"{symbol}: {item.headline}" if symbol else item.headline
+    embed = _new_embed(title, stock_logo, symbol, transparent_png)
     if item.summary:
         embed["description"] = item.summary
     if item.url:
@@ -149,9 +150,10 @@ async def send_payload(
 
 
 def _new_embed(title: str, stock_logo: str, symbol: str, transparent_png: str) -> Embed:
+    """Build an embed with the supplied title and symbol-specific thumbnail."""
     embed: Embed = {
         "title": title,
         "image": {"url": transparent_png},
-        "thumbnail": {"url": stock_logo.replace("%s", symbol.lower())},
+        "thumbnail": {"url": stock_logo.replace("%s", symbol.lower()) if symbol else transparent_png},
     }
     return embed

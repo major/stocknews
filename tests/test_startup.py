@@ -753,7 +753,6 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
                 "DISCORD_ANALYST_WEBHOOKS": "",
                 "DISCORD_EARNINGS_WEBHOOKS": "",
                 "DISCORD_NEWS_WEBHOOKS": "",
-                "BLOCKED_PHRASES": "",
             }
         )
         stop_event = asyncio.Event()
