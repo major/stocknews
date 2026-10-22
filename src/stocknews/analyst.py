@@ -3,9 +3,17 @@
 import re
 from dataclasses import dataclass
 
-_MAINTAINS_RE = re.compile(r"^([\w\s]+) (Maintains|Reiterates) (.*) on (.+),", re.IGNORECASE | re.ASCII)
+_MAINTAINS_RE = re.compile(r"^([\w\s&.'-]+) (Maintains|Reiterates) (.*) on (.+),", re.IGNORECASE | re.ASCII)
 _ACTION_RE = re.compile(
-    r"^([\w\s]+) (Downgrades|Upgrades|Initiates Coverage) (?:on\s)*([\w\s]+) (?:with|to) (.+),",
+    r"^([\w\s&.'-]+) (Downgrades|Upgrades|Initiates Coverage|Assumes) "
+    r"(?:on\s)*([\w\s&.'-]+) (?:with|to|at) (.+),",
+    re.IGNORECASE | re.ASCII,
+)
+_RATING_ONLY_RE = re.compile(
+    r"^([\w\s&.'-]+) (Downgrades|Upgrades) ([\w\s&.'-]+) to "
+    r"(Market Outperform|Market Perform|Market Underperform|Sector Outperform|Sector Perform|"
+    r"Sector Underperform|Equal-Weight|Equal Weight|Strong Buy|Strong Sell|Overweight|Underweight|"
+    r"Outperform|Underperform|Neutral|Positive|Negative|Buy|Hold|Sell)(?: Rating)?$",
     re.IGNORECASE | re.ASCII,
 )
 _PRICE_RE = re.compile(r"\$([\d\.]+)", re.ASCII)
@@ -33,7 +41,7 @@ def parse_analyst(headline: str) -> AnalystReport:
         firm, action, raw_guidance, stock = maintains_match.groups()
         guidance = _trim_rating(raw_guidance)
     else:
-        action_match = _ACTION_RE.search(headline)
+        action_match = _ACTION_RE.search(headline) or _RATING_ONLY_RE.search(headline)
         if action_match is None:
             firm = action = guidance = stock = ""
         else:

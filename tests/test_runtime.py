@@ -313,7 +313,7 @@ def _payload_title(payload: object) -> str:
     assert embeds
     embed = embeds[0]
     assert isinstance(embed, dict)
-    title = embed["title"]
+    title = embed.get("title", embed.get("author", {}).get("name"))
     assert isinstance(title, str)
     return title
 
@@ -462,11 +462,12 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
             "/analyst": {
                 "embeds": [
                     {
-                        "title": "💚 AAPL: Apple $223.00",
+                        "author": {
+                            "name": "💚 AAPL: Apple $223.00",
+                            "icon_url": "https://static.stocktitan.net/company-logo/aapl.webp",
+                        },
                         "description": "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
                         "color": 0x4CAF50,
-                        "image": {"url": _TRANSPARENT_PNG},
-                        "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                     }
                 ]
             },
@@ -750,11 +751,85 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
         requested_route, payload = requested[0]
         assert requested_route == route
         embed = payload["embeds"][0]
-        assert embed["title"] == title
-        thumbnail = embed["thumbnail"]["url"]
-        expected_thumbnail = _STOCK_LOGO.replace("%s", ticker.lower()) if ticker else _TRANSPARENT_PNG
-        assert thumbnail == expected_thumbnail
-        assert all(symbol not in f"{title}{thumbnail}" for symbol in symbols if ":" in symbol)
+        if route == "/analyst":
+            assert embed["author"]["name"] == title
+            if ticker:
+                assert embed["author"]["icon_url"] == _STOCK_LOGO.replace("%s", ticker.lower())
+            else:
+                assert "icon_url" not in embed["author"]
+            assert "image" not in embed
+            assert "thumbnail" not in embed
+            visible_title = embed["author"]["name"]
+        else:
+            assert embed["title"] == title
+            thumbnail = embed["thumbnail"]["url"]
+            expected_thumbnail = _STOCK_LOGO.replace("%s", ticker.lower()) if ticker else _TRANSPARENT_PNG
+            assert thumbnail == expected_thumbnail
+            visible_title = title
+        assert all(symbol not in visible_title for symbol in symbols if ":" in symbol)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("symbol", "company", "headline", "color"),
+    [
+        ("AA", "Alcoa", "Argus Research Downgrades Alcoa to Hold", 0xD42020),
+        ("EFX", "Equifax", "Argus Research Upgrades Equifax to Buy", 0x4CAF50),
+        ("OHI", "Omega Healthcare", "Citizens Upgrades Omega Healthcare Invts to Market Outperform", 0x4CAF50),
+        ("CME", "CME Group", "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target", 0x4CAF50),
+        (
+            "AA",
+            "Alcoa",
+            "Argus Research Downgrades Alcoa to Hold, Maintains Price Target of $32",
+            0xD42020,
+        ),
+    ],
+    ids=["argus-downgrade", "argus-upgrade", "citizens-upgrade", "jp-morgan-upgrade", "maintains-target-downgrade"],
+)
+def test_runtime_routes_rating_headlines_to_analyst_payloads(
+    symbol: str,
+    company: str,
+    headline: str,
+    color: int,
+) -> None:
+    """Verify rating headlines produce one correctly routed analyst delivery."""
+
+    async def scenario() -> None:
+        """Send one parameterized rating headline through the runtime."""
+        requested: list[tuple[str, dict[str, object]]] = []
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Record the webhook path and payload, then accept the delivery."""
+            requested.append((request.url.path, json.loads(request.content)))
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a stream with the parameterized rating headline."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield the rating headline once."""
+                yield NewsItem(symbols=(symbol,), author="Benzinga Newsdesk", headline=headline)
+
+            return events()
+
+        output = StringIO()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(output), connect_news)
+
+        assert len(requested) == 1
+        route, payload = requested[0]
+        assert route == "/analyst"
+        embed = payload["embeds"][0]
+        title = embed["author"]["name"]
+        assert symbol in title
+        assert company in title
+        assert "$0.00" not in title
+        assert embed["description"] == headline
+        assert embed["color"] == color
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        sent = [record for record in records if record["msg"] == "sent Discord webhook"]
+        assert [(record["kind"], record["symbol"], record["webhooks"]) for record in sent] == [("analyst", symbol, 1)]
 
     asyncio.run(scenario())
 
