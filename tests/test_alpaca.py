@@ -18,7 +18,7 @@ from wsproto.events import AcceptConnection, CloseConnection, Ping, TextMessage
 from wsproto.frame_protocol import Opcode
 
 from stocknews import alpaca
-from stocknews.models import AlpacaSettings, NewsItem, Trade
+from stocknews.models import AlpacaSettings, NewsItem
 
 EXPECTED_EVENT_QUEUE_CAPACITY = 256
 
@@ -29,9 +29,6 @@ TEST_API_CREDENTIAL = "secret"
 # Fake credentials used when tests inspect authentication requests.
 NEWS_TEST_API_KEY = "news-key"
 NEWS_TEST_API_CREDENTIAL = "news-secret"
-TRADE_TEST_API_KEY = "trade-key"
-TRADE_TEST_API_CREDENTIAL = "trade-secret"
-
 # Fake credentials deliberately included in failures to verify redaction.
 REDACTION_TEST_API_KEY = "private-key"
 REDACTION_TEST_API_CREDENTIAL = "private-secret"
@@ -45,7 +42,6 @@ def test_alpaca_settings_repr_excludes_credentials() -> None:
         api_key=REDACTION_TEST_API_KEY,
         api_secret=REDACTION_TEST_API_CREDENTIAL,
         news_stream_url="ws://news.test/v1beta1/news",
-        stock_stream_url="ws://stocks.test/v2",
     )
 
     representation = repr(settings)
@@ -53,7 +49,6 @@ def test_alpaca_settings_repr_excludes_credentials() -> None:
     assert REDACTION_TEST_API_KEY not in representation
     assert REDACTION_TEST_API_CREDENTIAL not in representation
     assert settings.news_stream_url in representation
-    assert settings.stock_stream_url in representation
 
 
 @pytest.mark.parametrize("wrapped_subscription", [False, True], ids=["flat-ack", "wrapped-ack"])
@@ -109,7 +104,6 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
                     api_key=NEWS_TEST_API_KEY,
                     api_secret=NEWS_TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=stop_event,
             )
@@ -126,96 +120,6 @@ def test_news_stream_authenticates_subscribes_and_decodes_events(wrapped_subscri
                 {"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL},
                 {"action": "subscribe", "news": ["*"]},
             ]
-            stop_event.set()
-            await asyncio.wait_for(stream.task, timeout=2)
-
-    asyncio.run(scenario())
-
-
-def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reconnect after a trade-stream disconnect and resubscribe to IEX trades."""
-
-    async def scenario() -> None:
-        monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
-        requests: list[dict[str, object]] = []
-        paths: list[str] = []
-        second_subscription = asyncio.Event()
-        connection_count = 0
-
-        async def app(
-            scope: dict[str, object],
-            receive: Callable[..., Awaitable[dict[str, object]]],
-            send: Callable[..., Awaitable[None]],
-        ) -> None:
-            nonlocal connection_count
-            connection_count += 1
-            paths.append(str(scope["path"]))
-            await receive()
-            await send({"type": "websocket.accept"})
-            while True:
-                incoming = await receive()
-                if incoming["type"] == "websocket.disconnect":
-                    return
-                message = json.loads(incoming["text"])
-                requests.append(message)
-                if message["action"] == "auth":
-                    await _send_json(send, {"T": "success", "msg": "authenticated"})
-                else:
-                    await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
-                    await _send_json(
-                        send,
-                        [
-                            {"T": "status", "msg": "feed ready"},
-                            {
-                                "T": "t",
-                                "S": "SPY",
-                                "p": 500.25,
-                                "s": 100,
-                                "x": "V",
-                                "t": "2026-09-21T14:30:00Z",
-                                "c": ["@", "F"],
-                                "z": "C",
-                            },
-                        ],
-                    )
-                    if connection_count == 1:
-                        await send({"type": "websocket.close", "code": 1001, "reason": "server restart"})
-                        return
-                    second_subscription.set()
-
-        stop_event = asyncio.Event()
-        async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
-            stream = await alpaca.start_trade_stream(
-                client,
-                settings=AlpacaSettings(
-                    api_key=TRADE_TEST_API_KEY,
-                    api_secret=TRADE_TEST_API_CREDENTIAL,
-                    news_stream_url="ws://unused.test/v1beta1/news",
-                    stock_stream_url="ws://alpaca.test/v2/",
-                ),
-                stop_event=stop_event,
-            )
-            first = await asyncio.wait_for(stream.events.get(), timeout=2)
-            await asyncio.wait_for(second_subscription.wait(), timeout=2)
-            second = await asyncio.wait_for(stream.events.get(), timeout=2)
-            assert first == Trade(
-                symbol="SPY",
-                price=500.25,
-                size=100,
-                exchange="V",
-                timestamp="2026-09-21T14:30:00Z",
-                conditions=("@", "F"),
-                tape="C",
-            )
-            assert second == first
-            assert paths == ["/v2/iex", "/v2/iex"]
-            assert requests == [
-                {"action": "auth", "key": TRADE_TEST_API_KEY, "secret": TRADE_TEST_API_CREDENTIAL},
-                {"action": "subscribe", "trades": ["SPY", "QQQ"]},
-                {"action": "auth", "key": TRADE_TEST_API_KEY, "secret": TRADE_TEST_API_CREDENTIAL},
-                {"action": "subscribe", "trades": ["SPY", "QQQ"]},
-            ]
-            assert stream.events.maxsize == EXPECTED_EVENT_QUEUE_CAPACITY
             stop_event.set()
             await asyncio.wait_for(stream.task, timeout=2)
 
@@ -267,7 +171,6 @@ def test_initial_news_auth_failure_is_raised_without_exposing_credentials(
                         api_key=AUTH_FAILURE_API_KEY,
                         api_secret=AUTH_FAILURE_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -323,7 +226,6 @@ def test_initial_transport_failure_is_clear_and_does_not_leak_tasks_or_credentia
                         api_key=REDACTION_TEST_API_KEY,
                         api_secret=REDACTION_TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -371,7 +273,6 @@ def test_initial_authentication_timeout_is_reported_without_leaking_tasks(monkey
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -416,7 +317,6 @@ def test_invalid_handshake_messages_fail_startup(response: str, diagnostic: str)
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -454,7 +354,6 @@ def test_malformed_established_message_terminates_the_stream() -> None:
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=asyncio.Event(),
                 on_terminated=terminal.append,
@@ -498,7 +397,6 @@ def test_unexpected_binary_message_terminates_the_stream() -> None:
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=asyncio.Event(),
                 on_terminated=terminal.append,
@@ -555,76 +453,6 @@ def test_invalid_news_field_terminates_established_stream(field: str, value: obj
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
-                ),
-                stop_event=asyncio.Event(),
-                on_terminated=terminal.append,
-            )
-            await asyncio.wait_for(stream.task, timeout=2)
-
-        assert len(terminal) == 1
-        assert diagnostic in str(terminal[0])
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "diagnostic"),
-    [
-        ("p", True, "price"),
-        ("p", "500.25", "price"),
-        ("p", float("nan"), "price"),
-        ("p", float("inf"), "price"),
-        ("s", True, "size"),
-        ("s", 1.5, "size"),
-        ("s", -1, "size"),
-        ("s", 2**32, "size"),
-    ],
-    ids=[
-        "boolean-price",
-        "text-price",
-        "nan-price",
-        "infinite-price",
-        "boolean-size",
-        "fractional-size",
-        "negative-size",
-        "oversized-size",
-    ],
-)
-def test_invalid_trade_number_terminates_established_stream(field: str, value: object, diagnostic: str) -> None:
-    """Terminate the trade stream when a numeric field has an invalid value.
-
-    Args:
-        field: Trade field to populate with an invalid number.
-        value: Invalid numeric value sent by the provider.
-        diagnostic: Expected field name in the terminal error.
-    """
-
-    async def scenario() -> None:
-        async def app(
-            scope: dict[str, object],
-            receive: Callable[..., Awaitable[dict[str, object]]],
-            send: Callable[..., Awaitable[None]],
-        ) -> None:
-            await receive()
-            await send({"type": "websocket.accept"})
-            await receive()
-            await _send_json(send, {"T": "success", "msg": "authenticated"})
-            await receive()
-            await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
-            trade: dict[str, object] = {"T": "t", "S": "SPY", "p": 500.25, "s": 10}
-            trade[field] = value
-            await _send_json(send, trade)
-
-        terminal: list[alpaca.AlpacaStreamError] = []
-        async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
-            stream = await alpaca.start_trade_stream(
-                client,
-                settings=AlpacaSettings(
-                    api_key=TEST_API_KEY,
-                    api_secret=TEST_API_CREDENTIAL,
-                    news_stream_url="ws://unused.test/v1beta1/news",
-                    stock_stream_url="ws://alpaca.test/v2",
                 ),
                 stop_event=asyncio.Event(),
                 on_terminated=terminal.append,
@@ -661,7 +489,6 @@ def test_terminal_protocol_error_without_callback_raises_from_stream_task() -> N
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=asyncio.Event(),
             )
@@ -767,7 +594,6 @@ def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url="ws://alpaca.test/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -826,7 +652,6 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
                     api_key=REDACTION_TEST_API_KEY,
                     api_secret=REDACTION_TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=stop_event,
                 on_terminated=terminal_errors.append,
@@ -1070,7 +895,6 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
                         api_key=NEWS_TEST_API_KEY,
                         api_secret=NEWS_TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -1123,7 +947,6 @@ def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: 
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -1188,7 +1011,6 @@ def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                     on_terminated=terminal.append,
@@ -1234,7 +1056,6 @@ def test_loopback_initial_upgrade_failure_remains_a_startup_failure(status_code:
                             api_key=TEST_API_KEY,
                             api_secret=TEST_API_CREDENTIAL,
                             news_stream_url=f"{server.url}/news",
-                            stock_stream_url="ws://unused.test/v2",
                         ),
                         stop_event=asyncio.Event(),
                     )
@@ -1278,7 +1099,6 @@ def test_loopback_acknowledgement_timeout_covers_the_entire_stage(monkeypatch: p
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -1347,7 +1167,6 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -1424,7 +1243,6 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=stop_event,
             )
@@ -1486,7 +1304,6 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
                     api_key=REDACTION_TEST_API_KEY,
                     api_secret=REDACTION_TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=asyncio.Event(),
                 on_terminated=terminal.append,
@@ -1538,7 +1355,6 @@ def test_loopback_oversized_message_is_terminal_with_1009_diagnostic(monkeypatch
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                     on_terminated=terminal.append,
@@ -1593,7 +1409,6 @@ def test_loopback_stop_cancels_during_auth_and_closes_socket() -> None:
                             api_key=TEST_API_KEY,
                             api_secret=TEST_API_CREDENTIAL,
                             news_stream_url=f"{server.url}/news",
-                            stock_stream_url="ws://unused.test/v2",
                         ),
                         stop_event=stop_event,
                     )
@@ -1660,7 +1475,6 @@ def test_loopback_stop_cancels_reconnect_backoff() -> None:
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -1713,7 +1527,6 @@ def test_loopback_stop_cancels_when_bounded_queue_is_full(monkeypatch: pytest.Mo
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -1760,7 +1573,6 @@ def test_stop_event_closes_an_established_idle_news_stream() -> None:
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
                     news_stream_url="ws://alpaca.test/v1beta1/news",
-                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=stop_event,
             )
@@ -1825,7 +1637,6 @@ def test_initial_websocket_disconnect_reports_a_safe_diagnostic(
                         api_key=REDACTION_TEST_API_KEY,
                         api_secret=api_secret,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -1862,7 +1673,6 @@ def test_initial_loopback_socket_reset_fails_stream_startup() -> None:
                         api_key=REDACTION_TEST_API_KEY,
                         api_secret=REDACTION_TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
-                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
