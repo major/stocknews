@@ -204,6 +204,7 @@ def _process_news_read(
     logger.info(
         "received news item",
         extra={
+            "author": message.author,
             "headline": message.headline,
             "summary": message.summary,
             "source": message.source,

@@ -536,6 +536,7 @@ def test_every_received_news_item_is_logged_once_before_filtering() -> None:
         receipts = [record for record in records if record["msg"] == "received news item"]
         accepted_receipt = {
             "level": "INFO",
+            "author": "Benzinga Newsdesk",
             "headline": "Apple launches a new iPhone &amp; more",
             "summary": "Line one\n<b>Line two</b>",
             "source": "benzinga",
@@ -545,6 +546,7 @@ def test_every_received_news_item_is_logged_once_before_filtering() -> None:
         }
         filtered_receipt = {
             "level": "INFO",
+            "author": "Someone Else",
             "headline": "Microsoft launches a tablet",
             "summary": "Filtered summary",
             "source": "other-feed",
