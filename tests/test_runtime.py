@@ -313,7 +313,7 @@ def _payload_title(payload: object) -> str:
     assert embeds
     embed = embeds[0]
     assert isinstance(embed, dict)
-    title = embed["title"]
+    title = embed.get("title", embed.get("author", {}).get("name"))
     assert isinstance(title, str)
     return title
 
@@ -462,11 +462,12 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
             "/analyst": {
                 "embeds": [
                     {
-                        "title": "💚 AAPL: Apple $223.00",
+                        "author": {
+                            "name": "💚 AAPL: Apple $223.00",
+                            "icon_url": "https://static.stocktitan.net/company-logo/aapl.webp",
+                        },
                         "description": "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
                         "color": 0x4CAF50,
-                        "image": {"url": _TRANSPARENT_PNG},
-                        "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                     }
                 ]
             },
@@ -750,11 +751,22 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
         requested_route, payload = requested[0]
         assert requested_route == route
         embed = payload["embeds"][0]
-        assert embed["title"] == title
-        thumbnail = embed["thumbnail"]["url"]
-        expected_thumbnail = _STOCK_LOGO.replace("%s", ticker.lower()) if ticker else _TRANSPARENT_PNG
-        assert thumbnail == expected_thumbnail
-        assert all(symbol not in f"{title}{thumbnail}" for symbol in symbols if ":" in symbol)
+        if route == "/analyst":
+            assert embed["author"]["name"] == title
+            if ticker:
+                assert embed["author"]["icon_url"] == _STOCK_LOGO.replace("%s", ticker.lower())
+            else:
+                assert "icon_url" not in embed["author"]
+            assert "image" not in embed
+            assert "thumbnail" not in embed
+            visible_title = embed["author"]["name"]
+        else:
+            assert embed["title"] == title
+            thumbnail = embed["thumbnail"]["url"]
+            expected_thumbnail = _STOCK_LOGO.replace("%s", ticker.lower()) if ticker else _TRANSPARENT_PNG
+            assert thumbnail == expected_thumbnail
+            visible_title = title
+        assert all(symbol not in visible_title for symbol in symbols if ":" in symbol)
 
     asyncio.run(scenario())
 
@@ -809,7 +821,7 @@ def test_runtime_routes_rating_headlines_to_analyst_payloads(
         route, payload = requested[0]
         assert route == "/analyst"
         embed = payload["embeds"][0]
-        title = embed["title"]
+        title = embed["author"]["name"]
         assert symbol in title
         assert company in title
         assert "$0.00" not in title

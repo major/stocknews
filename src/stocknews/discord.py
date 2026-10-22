@@ -27,12 +27,20 @@ class EmbedImage(TypedDict):
     url: str
 
 
-class Embed(TypedDict):
-    """A Discord embed with the required image and thumbnail fields."""
+class EmbedAuthor(TypedDict):
+    """An embed author line with an optional compact icon."""
 
-    title: str
-    image: EmbedImage
-    thumbnail: EmbedImage
+    name: str
+    icon_url: NotRequired[str]
+
+
+class Embed(TypedDict):
+    """A Discord embed with optional title, media, and author fields."""
+
+    title: NotRequired[str]
+    image: NotRequired[EmbedImage]
+    thumbnail: NotRequired[EmbedImage]
+    author: NotRequired[EmbedAuthor]
     description: NotRequired[str]
     color: NotRequired[int]
     url: NotRequired[str]
@@ -95,12 +103,10 @@ def analyst_payload(
     else:
         details = " ".join(part for part in (report.stock, report.guidance) if part)
     title = f"{emoji} {ticker_prefix}{details}".rstrip()
-    embed = _new_embed(
-        title,
-        stock_logo,
-        symbol,
-        transparent_png,
-    )
+    author: EmbedAuthor = {"name": title}
+    if symbol:
+        author["icon_url"] = stock_logo.replace("%s", symbol.lower())
+    embed: Embed = {"author": author}
     if headline:
         embed["description"] = headline
     embed["color"] = color

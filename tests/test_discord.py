@@ -129,11 +129,12 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
     expected = {
         "embeds": [
             {
-                "title": title,
+                "author": {
+                    "name": title,
+                    "icon_url": f"https://static.stocktitan.net/company-logo/{symbol.lower()}.webp",
+                },
                 "description": headline,
                 "color": color,
-                "image": {"url": TRANSPARENT_PNG},
-                "thumbnail": {"url": f"https://static.stocktitan.net/company-logo/{symbol.lower()}.webp"},
             }
         ]
     }
@@ -194,9 +195,11 @@ def test_analyst_payload_keeps_rating_changes_without_positive_target(
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert embed["title"] == title
+    assert embed["author"]["name"] == title
     assert embed["description"] == headline
     assert embed["color"] == color
+    assert "image" not in embed
+    assert "thumbnail" not in embed
 
 
 @pytest.mark.parametrize(
@@ -233,8 +236,14 @@ def test_rating_direction_takes_priority_over_target_direction(
     payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
-    assert payload["embeds"][0]["title"] == title
-    assert payload["embeds"][0]["color"] == color
+    embed = payload["embeds"][0]
+    assert embed["author"] == {
+        "name": title,
+        "icon_url": "https://static.stocktitan.net/company-logo/ex.webp",
+    }
+    assert embed["color"] == color
+    assert "image" not in embed
+    assert "thumbnail" not in embed
 
 
 @pytest.mark.parametrize(
@@ -267,11 +276,9 @@ def test_analyst_payload_uses_report_details_without_symbol() -> None:
     assert payload == {
         "embeds": [
             {
-                "title": "💔 Amazon $135.00",
+                "author": {"name": "💔 Amazon $135.00"},
                 "description": headline,
                 "color": 0xD42020,
-                "image": {"url": TRANSPARENT_PNG},
-                "thumbnail": {"url": TRANSPARENT_PNG},
             }
         ]
     }
