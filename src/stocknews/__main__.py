@@ -123,7 +123,11 @@ async def _run() -> None:
     logger = configure_logging()
     logger.info(
         "starting stocknews",
-        extra={"version": "dev", "commit": os.environ.get("GIT_SHA") or "unknown", "build_date": "unknown"},
+        extra={
+            "version": "dev",
+            "commit": (os.environ.get("GIT_SHA") or "unknown")[:7],
+            "build_date": os.environ.get("BUILD_DATE") or "unknown",
+        },
     )
     try:
         config = load_config(os.environ)

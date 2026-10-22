@@ -451,17 +451,24 @@ def test_alpaca_settings_repr_omits_credentials() -> None:
 @pytest.mark.parametrize(
     ("git_sha", "expected_commit"),
     [
-        ("0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567"),
+        ("0123456789abcdef0123456789abcdef01234567", "0123456"),
+        ("abc1234", "abc1234"),
         (None, "unknown"),
         ("", "unknown"),
     ],
-    ids=["deployed-commit", "unset-commit", "empty-commit"],
+    ids=["deployed-commit", "short-commit", "unset-commit", "empty-commit"],
+)
+@pytest.mark.parametrize(
+    "build_date",
+    ["2026-10-22T16:09:06Z", None, ""],
+    ids=["provided-build-date", "unset-build-date", "empty-build-date"],
 )
 def test_startup_logs_commit_before_missing_configuration(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     git_sha: str | None,
     expected_commit: str,
+    build_date: str | None,
 ) -> None:
     """Verify startup logs the commit before reporting missing configuration."""
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
@@ -470,6 +477,10 @@ def test_startup_logs_commit_before_missing_configuration(
         monkeypatch.delenv("GIT_SHA", raising=False)
     else:
         monkeypatch.setenv("GIT_SHA", git_sha)
+    if build_date is None:
+        monkeypatch.delenv("BUILD_DATE", raising=False)
+    else:
+        monkeypatch.setenv("BUILD_DATE", build_date)
 
     with pytest.raises(SystemExit) as error:
         main()
@@ -479,6 +490,8 @@ def test_startup_logs_commit_before_missing_configuration(
     assert len(records) == EXPECTED_STARTUP_LOG_RECORD_COUNT
     assert records[0]["msg"] == "starting stocknews"
     assert records[0]["commit"] == expected_commit
+    assert records[0]["build_date"] == (build_date or "unknown")
+    assert records[0]["version"] == "dev"
     assert records[1]["level"] == "ERROR"
     assert records[1]["msg"] == "invalid configuration"
     assert records[1]["error"] == "ALPACA_API_KEY is required"
