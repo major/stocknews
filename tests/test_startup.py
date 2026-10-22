@@ -10,6 +10,7 @@ import signal
 import sys
 from dataclasses import dataclass, field
 from functools import partial
+from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,15 +18,16 @@ import httpx2
 import pytest
 from httpx2.websockets import ASGIWebSocketTransport
 
-from stocknews.__main__ import _cancel_and_wait, _stream_events, main, run_application
+from stocknews.__main__ import _cancel_and_wait, main, run_application
 from stocknews.alpaca import AlpacaStreamError, StreamHandle
-from stocknews.models import AlpacaSettings, Config, NewsItem
+from stocknews.models import AlpacaSettings, Config, Trade
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, Iterator
+    from collections.abc import Callable, Iterator
 
 EXPECTED_CONFIGURATION_ERROR_EXIT_CODE = 2
 EXPECTED_STARTUP_LOG_RECORD_COUNT = 2
+EXPECTED_ALPACA_STREAM_COUNT = 2
 MINIMUM_HTTP_REQUEST_LINE_PARTS = 2
 WEBSOCKET_TEXT_FRAME_OPCODE = 0x1
 WEBSOCKET_CLOSE_FRAME_OPCODE = 0x8
@@ -40,7 +42,11 @@ DUMMY_FAILURE_API_KEY, DUMMY_FAILURE_API_SECRET = DUMMY_FAILURE_CREDENTIALS
 DUMMY_REPR_CREDENTIALS = ("repr-test-key", "repr-test-secret")
 DUMMY_REPR_API_KEY, DUMMY_REPR_API_SECRET = DUMMY_REPR_CREDENTIALS
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-STARTUP_TEST_LOGGER_NAMES = ("startup-terminal-test",)
+STARTUP_TEST_LOGGER_NAMES = (
+    "startup-stream-test",
+    "startup-stock-termination-test",
+    "startup-terminal-test",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -67,15 +73,405 @@ def isolate_startup_test_loggers() -> Iterator[None]:
         logger.disabled = disabled
 
 
+class _ObservedTradeQueue(asyncio.Queue[Trade]):
+    """Signal when the stock reader starts waiting for a trade."""
+
+    def __init__(self) -> None:
+        """Initialize the queue and its consumer-waiting event."""
+        super().__init__()
+        self.consumer_waiting = asyncio.Event()
+
+    async def get(self) -> Trade:
+        """Mark the consumer as waiting before reading the next trade."""
+        self.consumer_waiting.set()
+        return await super().get()
+
+
+@dataclass
+class _StockEofTestState:
+    """Hold state shared by the stock-EOF test collaborators."""
+
+    stock_completion: str
+    expect_trade: bool
+    delivery_started: asyncio.Event = field(default_factory=asyncio.Event)
+    release_delivery: asyncio.Event = field(default_factory=asyncio.Event)
+    news_disconnected: asyncio.Event = field(default_factory=asyncio.Event)
+    finish_stock: asyncio.Event = field(default_factory=asyncio.Event)
+    trade_logged: asyncio.Event = field(default_factory=asyncio.Event)
+    delivered: list[dict[str, object]] = field(default_factory=list)
+    stock_queues: list[_ObservedTradeQueue] = field(default_factory=list)
+    stock_tasks: list[asyncio.Task[None]] = field(default_factory=list)
+
+    async def start_stock(
+        self,
+        _client,
+        *,
+        settings: AlpacaSettings,
+        stop_event: asyncio.Event,
+        on_terminated: Callable[[AlpacaStreamError], None] | None = None,
+    ) -> StreamHandle[Trade]:
+        """Start this scenario's stock task and return its observed trade queue.
+
+        Args:
+            _client: HTTP client supplied by the application.
+            settings: Alpaca credentials and stream URLs supplied by the application.
+            stop_event: Application stop event.
+            on_terminated: Callback for reporting stream termination.
+
+        Returns:
+            A stock stream handle configured for this scenario's race case.
+        """
+        events = _ObservedTradeQueue()
+        self.stock_queues.append(events)
+
+        if self.stock_completion == "completed-with-queued-trade":
+            await self.delivery_started.wait()
+            events.put_nowait(Trade(symbol="SPY", price=500.25, size=100))
+            task = asyncio.create_task(_completed_stock_stream())
+            await task
+        else:
+            task = asyncio.create_task(_wait_for_stock_eof(self.finish_stock))
+
+        self.stock_tasks.append(task)
+        return StreamHandle(events=events, task=task)
+
+
+class _TradeLogObserver(logging.Handler):
+    """Signal when the application logs a stock trade."""
+
+    def __init__(self, trade_logged: asyncio.Event) -> None:
+        """Store the event used to observe a trade log."""
+        super().__init__()
+        self.trade_logged = trade_logged
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Set the event when the application emits a stock trade log."""
+        if record.getMessage() == "stock trade":
+            self.trade_logged.set()
+
+
+async def _stock_eof_news_app(scope, receive, send, *, state: _StockEofTestState) -> None:
+    """Serve the Alpaca news ASGI messages used by stock-EOF scenarios.
+
+    Args:
+        scope: ASGI connection scope.
+        receive: ASGI receive callable.
+        send: ASGI send callable.
+        state: Events and values shared with the stock-EOF scenario.
+    """
+    assert scope["path"] == "/v1beta1/news"
+    await receive()
+    await send({"type": "websocket.accept"})
+
+    while True:
+        message = await receive()
+        if message["type"] == "websocket.disconnect":
+            state.news_disconnected.set()
+            return
+
+        request = json.loads(message["text"])
+        if request["action"] == "auth":
+            response = {"T": "success", "msg": "authenticated"}
+            await send({"type": "websocket.send", "text": json.dumps(response)})
+        else:
+            subscription = {"T": "subscription", "news": ["*"]}
+            await send({"type": "websocket.send", "text": json.dumps(subscription)})
+            news_item = {
+                "T": "n",
+                "symbols": ["AAPL"],
+                "author": "Benzinga Newsdesk",
+                "headline": "Apple launches a phone",
+            }
+            await send({"type": "websocket.send", "text": json.dumps(news_item)})
+
+
+async def _completed_stock_stream() -> None:
+    """Return immediately for a stock task representing completed startup."""
+
+
+async def _wait_for_stock_eof(finish_stock: asyncio.Event) -> None:
+    """Keep a pending stock stream open until its test releases it."""
+    await finish_stock.wait()
+
+
+async def _complete_stock_eof_application(
+    state: _StockEofTestState,
+    application: asyncio.Task[None],
+) -> None:
+    """Release the stock-EOF scenario and wait for orderly application shutdown.
+
+    Args:
+        state: Events and collections shared with the stock-EOF scenario.
+        application: The running application task.
+    """
+    try:
+        await asyncio.wait_for(state.delivery_started.wait(), timeout=2)
+        if state.stock_completion != "completed-with-queued-trade":
+            events = state.stock_queues[0]
+            await asyncio.wait_for(events.consumer_waiting.wait(), timeout=2)
+            if state.stock_completion == "pending-with-queued-trade":
+                # Queue a final trade after the reader's completion callback is registered.
+                state.stock_tasks[0].add_done_callback(
+                    lambda _task: events.put_nowait(Trade(symbol="SPY", price=500.25, size=100))
+                )
+            state.finish_stock.set()
+            await asyncio.wait_for(state.stock_tasks[0], timeout=2)
+
+        if state.expect_trade:
+            await asyncio.wait_for(state.trade_logged.wait(), timeout=2)
+        assert not application.done()
+        state.release_delivery.set()
+        await asyncio.wait_for(application, timeout=2)
+        await asyncio.wait_for(state.news_disconnected.wait(), timeout=2)
+    finally:
+        state.release_delivery.set()
+        state.finish_stock.set()
+        if not application.done():
+            application.cancel()
+        await asyncio.gather(application, return_exceptions=True)
+
+
+async def _run_stock_eof_scenario(stock_completion: str, expect_trade: bool) -> None:
+    """Exercise queued-news draining for one stock-EOF race scenario.
+
+    Args:
+        stock_completion: The stock task completion timing to exercise.
+        expect_trade: Whether a queued final trade should be logged.
+    """
+    state = _StockEofTestState(stock_completion, expect_trade)
+    config = Config(
+        alpaca_api_key=DUMMY_ALPACA_API_KEY,
+        alpaca_api_secret=DUMMY_ALPACA_API_SECRET,
+        alpaca_news_stream_url="ws://news.test/v1beta1/news",
+        alpaca_stock_stream_url="wss://stocks.test/v2",
+        discord_analyst_webhooks=(),
+        discord_earnings_webhooks=(),
+        discord_news_webhooks=("https://discord.test/webhook/private-token",),
+        stock_logo="https://example.test/%s.webp",
+        transparent_png="https://example.test/transparent.png",
+        blocked_phrases=(),
+    )
+    output = StringIO()
+    logger = logging.getLogger("startup-stream-test")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.StreamHandler(output))
+    logger.addHandler(_TradeLogObserver(state.trade_logged))
+    stop_event = asyncio.Event()
+
+    async with ASGIWebSocketTransport(partial(_stock_eof_news_app, state=state)) as websocket_transport:
+        mounts = {
+            "ws://news.test": websocket_transport,
+            "https://discord.test": httpx2.MockTransport(partial(_stock_eof_discord_handler, state=state)),
+        }
+        async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
+            application = asyncio.create_task(
+                run_application(
+                    config,
+                    client,
+                    logger,
+                    stop_event,
+                    stock_starter=state.start_stock,
+                )
+            )
+            await _complete_stock_eof_application(state, application)
+
+    assert stop_event.is_set()
+    assert len(state.delivered) == 1
+    assert state.delivered[0]["embeds"][0]["title"] == "AAPL: Apple launches a phone"
+    assert ("stock trade" in output.getvalue()) is expect_trade
+
+
+async def _stock_eof_discord_handler(
+    request: httpx2.Request,
+    *,
+    state: _StockEofTestState,
+) -> httpx2.Response:
+    """Hold Discord delivery until the stock-EOF scenario releases it.
+
+    Args:
+        request: The HTTP request made by the application.
+        state: Events and collections shared with the stock-EOF scenario.
+
+    Returns:
+        A successful Discord response after recording the embed payload.
+    """
+    state.delivery_started.set()
+    await state.release_delivery.wait()
+    state.delivered.append(json.loads(request.content))
+    return httpx2.Response(204)
+
+
+@dataclass
+class _TerminatedStockTestState:
+    """Hold state shared by the terminated-stock test collaborators."""
+
+    failure_message: str = "Alpaca trades stream connection failed: WebSocketNetworkError"
+    news_subscribed: asyncio.Event = field(default_factory=asyncio.Event)
+    news_disconnected: asyncio.Event = field(default_factory=asyncio.Event)
+    news_app_task: asyncio.Task[None] | None = None
+    stock_tasks: list[asyncio.Task[None]] = field(default_factory=list)
+    webhook_requests: list[httpx2.Request] = field(default_factory=list)
+    stock_failure: AlpacaStreamError = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Create the stock stream failure reported to the application."""
+        self.stock_failure = AlpacaStreamError(self.failure_message)
+
+    async def start_stock(
+        self,
+        _client,
+        *,
+        settings: AlpacaSettings,
+        stop_event: asyncio.Event,
+        on_terminated: Callable[[AlpacaStreamError], None] | None = None,
+    ) -> StreamHandle[Trade]:
+        """Report termination after this scenario subscribes to news.
+
+        Args:
+            _client: HTTP client supplied by the application.
+            settings: Alpaca credentials and stream URLs supplied by the application.
+            stop_event: Application stop event.
+            on_terminated: Callback for reporting stream termination.
+
+        Returns:
+            A stock stream handle whose task has already completed.
+        """
+        await self.news_subscribed.wait()
+        task = asyncio.create_task(_completed_stock_stream())
+        await task
+        assert not self.news_disconnected.is_set()
+        on_terminated(self.stock_failure)
+        self.stock_tasks.append(task)
+        return StreamHandle(events=asyncio.Queue(), task=task)
+
+
+async def _terminated_stock_news_app(scope, receive, send, *, state: _TerminatedStockTestState) -> None:
+    """Serve news ASGI messages while the stock stream terminates.
+
+    Args:
+        scope: ASGI connection scope.
+        receive: ASGI receive callable.
+        send: ASGI send callable.
+        state: Events and task references shared with the termination scenario.
+    """
+    state.news_app_task = asyncio.current_task()
+    assert scope["path"] == "/v1beta1/news"
+    await receive()
+    await send({"type": "websocket.accept"})
+
+    while True:
+        message = await receive()
+        if message["type"] == "websocket.disconnect":
+            state.news_disconnected.set()
+            return
+
+        request = json.loads(message["text"])
+        if request["action"] == "auth":
+            response = {"T": "success", "msg": "authenticated"}
+            await send({"type": "websocket.send", "text": json.dumps(response)})
+        else:
+            subscription = {"T": "subscription", "news": ["*"]}
+            await send({"type": "websocket.send", "text": json.dumps(subscription)})
+            state.news_subscribed.set()
+
+
+async def _record_terminated_stock_webhook_request(
+    request: httpx2.Request,
+    state: _TerminatedStockTestState,
+) -> httpx2.Response:
+    """Record an unexpected webhook request from a terminated-stock scenario.
+
+    Args:
+        request: The HTTP request made by the application.
+        state: Collections shared with the termination scenario.
+
+    Returns:
+        A successful Discord response.
+    """
+    state.webhook_requests.append(request)
+    return httpx2.Response(204)
+
+
+async def _run_terminated_stock_scenario() -> None:
+    """Verify a terminated stock handle closes the active news stream."""
+    state = _TerminatedStockTestState()
+    config = Config(
+        alpaca_api_key=DUMMY_ALPACA_API_KEY,
+        alpaca_api_secret=DUMMY_ALPACA_API_SECRET,
+        alpaca_news_stream_url="ws://news.test/v1beta1/news",
+        alpaca_stock_stream_url="wss://stocks.test/v2",
+        discord_analyst_webhooks=(),
+        discord_earnings_webhooks=(),
+        discord_news_webhooks=("https://discord.test/webhook/startup-test-token",),
+        stock_logo="https://example.test/%s.webp",
+        transparent_png="https://example.test/transparent.png",
+        blocked_phrases=(),
+    )
+    stop_event = asyncio.Event()
+    logger = logging.getLogger("startup-stock-termination-test")
+
+    async with ASGIWebSocketTransport(partial(_terminated_stock_news_app, state=state)) as websocket_transport:
+        mounts = {
+            "ws://news.test": websocket_transport,
+            "https://discord.test": httpx2.MockTransport(
+                partial(_record_terminated_stock_webhook_request, state=state)
+            ),
+        }
+        async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
+            # Context-owned tasks belong to the baseline. The ASGI server task
+            # created for this request is awaited before checking for new leaks.
+            tasks_before_application = asyncio.all_tasks()
+            with pytest.raises(RuntimeError, match="alpaca stock stream terminated") as error:
+                await asyncio.wait_for(
+                    run_application(
+                        config,
+                        client,
+                        logger,
+                        stop_event,
+                        stock_starter=state.start_stock,
+                    ),
+                    timeout=2,
+                )
+
+            assert str(error.value) == f"alpaca stock stream terminated: {state.failure_message}"
+            assert DUMMY_ALPACA_API_SECRET not in str(error.value)
+            assert stop_event.is_set()
+            assert len(state.stock_tasks) == 1
+            assert state.stock_tasks[0].done()
+            await asyncio.wait_for(state.news_disconnected.wait(), timeout=2)
+            assert state.news_app_task is not None
+            await asyncio.wait_for(state.news_app_task, timeout=2)
+
+            new_pending_tasks = asyncio.all_tasks() - tasks_before_application
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                new_pending_tasks.discard(current_task)
+            assert not new_pending_tasks, f"pending tasks after stock termination: {new_pending_tasks!r}"
+            assert state.webhook_requests == []
+
+
 @dataclass
 class _SigtermWebSocketState:
-    """Hold events and connection tasks for the real SIGTERM news WebSocket server."""
+    """Hold events and connection tasks for the real SIGTERM WebSocket server."""
 
     stop_during_authentication: bool
-    authenticated: asyncio.Event = field(default_factory=asyncio.Event)
-    subscribed: asyncio.Event = field(default_factory=asyncio.Event)
-    disconnected: asyncio.Event = field(default_factory=asyncio.Event)
+    subscribed_streams: set[str] = field(default_factory=set)
+    authentication_streams: set[str] = field(default_factory=set)
+    disconnected_streams: set[str] = field(default_factory=set)
+    both_subscribed: asyncio.Event = field(default_factory=asyncio.Event)
+    both_authenticated: asyncio.Event = field(default_factory=asyncio.Event)
+    both_disconnected: asyncio.Event = field(default_factory=asyncio.Event)
     connection_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+
+    def note_disconnected(self, stream_name: str) -> None:
+        """Record a disconnected stream and signal when both streams close.
+
+        Args:
+            stream_name: The Alpaca stream that disconnected.
+        """
+        self.disconnected_streams.add(stream_name)
+        if len(self.disconnected_streams) == EXPECTED_ALPACA_STREAM_COUNT:
+            self.both_disconnected.set()
 
 
 async def _send_websocket_frame(
@@ -193,6 +589,7 @@ async def _complete_websocket_upgrade(writer: asyncio.StreamWriter, key: str) ->
 async def _handle_websocket_control_frame(
     writer: asyncio.StreamWriter,
     state: _SigtermWebSocketState,
+    stream_name: str,
     opcode: int,
     payload: bytes,
 ) -> bool:
@@ -200,7 +597,8 @@ async def _handle_websocket_control_frame(
 
     Args:
         writer: Stream writer for the WebSocket connection.
-        state: Shared state for the real-loopback news server.
+        state: Shared state for the real-loopback stream server.
+        stream_name: Name of the Alpaca stream on this connection.
         opcode: Received WebSocket frame opcode.
         payload: Received WebSocket frame payload.
 
@@ -209,7 +607,7 @@ async def _handle_websocket_control_frame(
     """
     if opcode == WEBSOCKET_CLOSE_FRAME_OPCODE:
         await _send_websocket_frame(writer, WEBSOCKET_CLOSE_FRAME_OPCODE, payload[:125])
-        state.disconnected.set()
+        state.note_disconnected(stream_name)
         return True
     if opcode == WEBSOCKET_PING_FRAME_OPCODE:
         await _send_websocket_frame(writer, WEBSOCKET_PONG_FRAME_OPCODE, payload)
@@ -220,50 +618,66 @@ async def _authenticate_sigterm_stream(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     state: _SigtermWebSocketState,
+    stream_name: str,
 ) -> bool:
-    """Acknowledge news authentication or wait for SIGTERM during authentication.
+    """Acknowledge stream authentication or wait for SIGTERM during news auth.
 
     Args:
         reader: Stream reader for the WebSocket connection.
         writer: Stream writer for the WebSocket connection.
-        state: Shared state for the real-loopback news server.
+        state: Shared state for the real-loopback stream server.
+        stream_name: Name of the Alpaca stream on this connection.
 
     Returns:
         Whether a close frame ended the connection while news auth was pending.
     """
-    state.authenticated.set()
-    if state.stop_during_authentication:
+    state.authentication_streams.add(stream_name)
+    if len(state.authentication_streams) == EXPECTED_ALPACA_STREAM_COUNT:
+        state.both_authenticated.set()
+    if state.stop_during_authentication and stream_name == "news":
         while True:
             opcode, payload = await _receive_websocket_frame(reader)
-            if await _handle_websocket_control_frame(writer, state, opcode, payload):
+            if await _handle_websocket_control_frame(writer, state, stream_name, opcode, payload):
                 return True
     await _send_websocket_json(writer, {"T": "success", "msg": "authenticated"})
     return False
 
 
-async def _subscribe_sigterm_stream(writer: asyncio.StreamWriter, state: _SigtermWebSocketState) -> None:
-    """Send the news subscription response and record the subscription.
+async def _subscribe_sigterm_stream(
+    writer: asyncio.StreamWriter,
+    state: _SigtermWebSocketState,
+    stream_name: str,
+) -> None:
+    """Send the stream-specific subscription response and record subscription.
 
     Args:
         writer: Stream writer for the WebSocket connection.
-        state: Shared state for the real-loopback news server.
+        state: Shared state for the real-loopback stream server.
+        stream_name: Name of the Alpaca stream on this connection.
     """
-    await _send_websocket_json(writer, {"T": "subscription", "news": ["*"]})
-    state.subscribed.set()
+    if stream_name == "news":
+        await _send_websocket_json(writer, {"T": "subscription", "news": ["*"]})
+    else:
+        await _send_websocket_json(writer, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+    state.subscribed_streams.add(stream_name)
+    if len(state.subscribed_streams) == EXPECTED_ALPACA_STREAM_COUNT:
+        state.both_subscribed.set()
 
 
 async def _handle_sigterm_stream_request(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     state: _SigtermWebSocketState,
+    stream_name: str,
     payload: bytes,
 ) -> bool:
-    """Handle one Alpaca news authentication or subscription request.
+    """Handle one Alpaca authentication or subscription request.
 
     Args:
         reader: Stream reader for the WebSocket connection.
         writer: Stream writer for the WebSocket connection.
-        state: Shared state for the real-loopback news server.
+        state: Shared state for the real-loopback stream server.
+        stream_name: Name of the Alpaca stream on this connection.
         payload: JSON request bytes from the WebSocket text frame.
 
     Returns:
@@ -271,8 +685,8 @@ async def _handle_sigterm_stream_request(
     """
     request = json.loads(payload)
     if request["action"] == "auth":
-        return await _authenticate_sigterm_stream(reader, writer, state)
-    await _subscribe_sigterm_stream(writer, state)
+        return await _authenticate_sigterm_stream(reader, writer, state, stream_name)
+    await _subscribe_sigterm_stream(writer, state, stream_name)
     return False
 
 
@@ -280,21 +694,23 @@ async def _serve_sigterm_websocket_session(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     state: _SigtermWebSocketState,
+    stream_name: str,
 ) -> None:
-    """Serve authentication and subscription messages on the Alpaca news stream.
+    """Serve authentication and subscription messages on an Alpaca stream.
 
     Args:
         reader: Stream reader for the WebSocket connection.
         writer: Stream writer for the WebSocket connection.
-        state: Shared state for the real-loopback news server.
+        state: Shared state for the real-loopback stream server.
+        stream_name: Name of the Alpaca stream on this connection.
     """
     while True:
         opcode, payload = await _receive_websocket_frame(reader)
-        if await _handle_websocket_control_frame(writer, state, opcode, payload):
+        if await _handle_websocket_control_frame(writer, state, stream_name, opcode, payload):
             return
         if opcode != WEBSOCKET_TEXT_FRAME_OPCODE:
             continue
-        if await _handle_sigterm_stream_request(reader, writer, state, payload):
+        if await _handle_sigterm_stream_request(reader, writer, state, stream_name, payload):
             return
 
 
@@ -303,21 +719,23 @@ async def _serve_sigterm_websocket(
     writer: asyncio.StreamWriter,
     state: _SigtermWebSocketState,
 ) -> None:
-    """Upgrade and serve one real-loopback Alpaca news WebSocket connection.
+    """Upgrade and serve one real-loopback Alpaca WebSocket connection.
 
     Args:
         reader: Stream reader for the new TCP connection.
         writer: Stream writer for the new TCP connection.
-        state: Shared state for the real-loopback news server.
+        state: Shared state for the real-loopback stream server.
     """
+    path = ""
     try:
         path = await _read_websocket_request_path(reader)
-        assert path.endswith("/v1beta1/news")
         key = await _read_websocket_key(reader)
         await _complete_websocket_upgrade(writer, key)
-        await _serve_sigterm_websocket_session(reader, writer, state)
+        stream_name = "news" if path.endswith("/news") else "stock"
+        await _serve_sigterm_websocket_session(reader, writer, state, stream_name)
     except asyncio.IncompleteReadError, ConnectionError:
-        state.disconnected.set()
+        if path:
+            state.note_disconnected("news" if path.endswith("/news") else "stock")
     finally:
         writer.close()
         try:  # noqa: SIM105 - keep exception groups intact while suppressing direct errors
@@ -345,7 +763,7 @@ def _accept_sigterm_connection(
 
 
 async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> None:
-    """Run the CLI against a real loopback Alpaca news stream and request SIGTERM.
+    """Run the CLI against real loopback Alpaca streams and request SIGTERM.
 
     Args:
         stop_during_authentication: Whether to stop before news authentication completes.
@@ -366,6 +784,7 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
                 "ALPACA_API_KEY": DUMMY_ALPACA_API_KEY,
                 "ALPACA_API_SECRET": DUMMY_ALPACA_API_SECRET,
                 "ALPACA_NEWS_STREAM_URL": f"ws://127.0.0.1:{port}/v1beta1/news",
+                "ALPACA_STOCK_STREAM_URL": f"ws://127.0.0.1:{port}/v2",
                 "DISCORD_ANALYST_WEBHOOKS": "",
                 "DISCORD_EARNINGS_WEBHOOKS": "",
                 "DISCORD_NEWS_WEBHOOKS": "",
@@ -382,12 +801,12 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
             stderr=asyncio.subprocess.PIPE,
         )
         if stop_during_authentication:
-            await asyncio.wait_for(state.authenticated.wait(), timeout=5)
+            await asyncio.wait_for(state.both_authenticated.wait(), timeout=5)
         else:
-            await asyncio.wait_for(state.subscribed.wait(), timeout=5)
+            await asyncio.wait_for(state.both_subscribed.wait(), timeout=5)
         process.send_signal(signal.SIGTERM)
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
-        await asyncio.wait_for(state.disconnected.wait(), timeout=2)
+        await asyncio.wait_for(state.both_disconnected.wait(), timeout=2)
         assert process.returncode == 0, stderr.decode()
         logs = stdout.decode()
         records = [json.loads(line) for line in logs.splitlines()]
@@ -396,7 +815,7 @@ async def _run_sigterm_subprocess_scenario(stop_during_authentication: bool) -> 
         assert DUMMY_ALPACA_API_KEY not in logs
         assert DUMMY_ALPACA_API_SECRET not in logs
         if stop_during_authentication:
-            assert not state.subscribed.is_set()
+            assert "news" not in state.subscribed_streams
     finally:
         if process is not None and process.returncode is None:
             process.kill()
@@ -413,6 +832,7 @@ def test_alpaca_settings_repr_omits_credentials() -> None:
         api_key=DUMMY_REPR_API_KEY,
         api_secret=DUMMY_REPR_API_SECRET,
         news_stream_url="ws://news.test/v1beta1/news",
+        stock_stream_url="wss://stocks.test/v2",
     )
 
     representation = repr(settings)
@@ -420,6 +840,7 @@ def test_alpaca_settings_repr_omits_credentials() -> None:
     assert DUMMY_REPR_API_KEY not in representation
     assert DUMMY_REPR_API_SECRET not in representation
     assert "ws://news.test/v1beta1/news" in representation
+    assert "wss://stocks.test/v2" in representation
 
 
 @pytest.mark.parametrize(
@@ -519,141 +940,21 @@ def test_cancel_and_wait_preserves_mixed_base_exception_group() -> None:
     asyncio.run(scenario())
 
 
-class _ObservedNewsQueue(asyncio.Queue[NewsItem]):
-    """Signal when the news reader starts waiting for an item."""
-
-    def __init__(self) -> None:
-        """Initialize the queue and its consumer-waiting event."""
-        super().__init__()
-        self.consumer_waiting = asyncio.Event()
-
-    async def get(self) -> NewsItem:
-        """Mark the consumer as waiting before reading the next news item."""
-        self.consumer_waiting.set()
-        return await super().get()
-
-
-def _news_item(headline: str) -> NewsItem:
-    """Build a Benzinga-style news item with the given headline.
-
-    Args:
-        headline: Headline text for the news item.
-
-    Returns:
-        A news item for the stream reader tests.
-    """
-    return NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline=headline)
-
-
-async def _completed_news_producer() -> None:
-    """Return immediately for a news task representing a finished producer."""
-
-
-async def _wait_for_news_producer_eof(finish_producer: asyncio.Event) -> None:
-    """Keep a pending news producer open until its test releases it.
-
-    Args:
-        finish_producer: Event that completes the producer task.
-    """
-    await finish_producer.wait()
-
-
-async def _collect_stream_events(
-    handle: StreamHandle[NewsItem],
-    terminated: asyncio.Future[AlpacaStreamError],
-) -> list[NewsItem]:
-    """Collect every item yielded by the news stream reader.
-
-    Args:
-        handle: News stream handle whose queue and task are read.
-        terminated: Future that reports stream termination.
-
-    Returns:
-        Every news item yielded before the reader ends.
-    """
-    events: AsyncIterable[NewsItem] = _stream_events(handle, terminated)
-    return [item async for item in events]
-
-
-async def _run_news_stream_eof_scenario(producer_timing: str, buffered_headlines: tuple[str, ...]) -> list[NewsItem]:
-    """Run the news stream reader against one producer-completion timing.
-
-    Args:
-        producer_timing: When the producer completes relative to the reader.
-        buffered_headlines: Headlines queued before the reader starts.
-
-    Returns:
-        Every news item the reader yields before it ends.
-    """
-    terminated: asyncio.Future[AlpacaStreamError] = asyncio.get_running_loop().create_future()
-    events = _ObservedNewsQueue()
-    for headline in buffered_headlines:
-        events.put_nowait(_news_item(headline))
-
-    if producer_timing == "completed-with-buffered-events":
-        task = asyncio.create_task(_completed_news_producer())
-        await task
-        handle = StreamHandle(events=events, task=task)
-        return await asyncio.wait_for(_collect_stream_events(handle, terminated), timeout=2)
-
-    finish_producer = asyncio.Event()
-    task = asyncio.create_task(_wait_for_news_producer_eof(finish_producer))
-    handle = StreamHandle(events=events, task=task)
-    consumer = asyncio.create_task(_collect_stream_events(handle, terminated))
-    try:
-        await asyncio.wait_for(events.consumer_waiting.wait(), timeout=2)
-        if producer_timing == "pending-with-queued-event":
-            # Queue a final item after the reader's completion callback is registered.
-            task.add_done_callback(lambda _task: events.put_nowait(_news_item("Final headline")))
-        finish_producer.set()
-        return await asyncio.wait_for(consumer, timeout=2)
-    finally:
-        finish_producer.set()
-        consumer.cancel()
-        await asyncio.gather(consumer, task, return_exceptions=True)
-
-
 @pytest.mark.parametrize(
-    ("producer_timing", "buffered_headlines", "expected_headlines"),
+    ("stock_completion", "expect_trade"),
     [
-        (
-            "completed-with-buffered-events",
-            ("First headline", "Second headline"),
-            ("First headline", "Second headline"),
-        ),
-        ("pending-empty", (), ()),
-        ("pending-with-queued-event", (), ("Final headline",)),
+        ("completed-with-queued-trade", True),
+        ("pending-empty", False),
+        ("pending-with-queued-trade", True),
     ],
     ids=["precompleted-buffer", "normal-eof-while-reading", "queued-event-races-eof"],
 )
-def test_stream_events_yields_news_until_producer_completes(
-    producer_timing: str,
-    buffered_headlines: tuple[str, ...],
-    expected_headlines: tuple[str, ...],
+def test_run_application_drains_queued_news_when_stock_stream_reaches_eof(
+    stock_completion: str,
+    expect_trade: bool,
 ) -> None:
-    """Verify the news reader yields buffered and final items before it ends."""
-    received = asyncio.run(_run_news_stream_eof_scenario(producer_timing, buffered_headlines))
-
-    assert [item.headline for item in received] == list(expected_headlines)
-
-
-def test_stream_events_raises_termination_seen_before_next_read() -> None:
-    """Verify a termination recorded before the next read raises instead of yielding queued news."""
-
-    async def scenario() -> None:
-        terminated: asyncio.Future[AlpacaStreamError] = asyncio.get_running_loop().create_future()
-        terminated.set_result(AlpacaStreamError("Alpaca news stream failed"))
-        events: asyncio.Queue[NewsItem] = asyncio.Queue()
-        events.put_nowait(_news_item("Queued headline"))
-        task = asyncio.create_task(_completed_news_producer())
-        await task
-        handle = StreamHandle(events=events, task=task)
-
-        with pytest.raises(AlpacaStreamError, match="Alpaca news stream failed"):
-            await asyncio.wait_for(_collect_stream_events(handle, terminated), timeout=2)
-        assert events.qsize() == 1
-
-    asyncio.run(scenario())
+    """Verify stock EOF drains queued news and any final trade."""
+    asyncio.run(_run_stock_eof_scenario(stock_completion, expect_trade))
 
 
 def test_run_application_shuts_down_on_termination_immediately_after_subscription() -> None:
@@ -691,6 +992,7 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
             alpaca_api_key=DUMMY_ALPACA_API_KEY,
             alpaca_api_secret=DUMMY_ALPACA_API_SECRET,
             alpaca_news_stream_url="ws://news.test/v1beta1/news",
+            alpaca_stock_stream_url="wss://stocks.test/v2",
             discord_analyst_webhooks=(),
             discord_earnings_webhooks=(),
             discord_news_webhooks=(),
@@ -706,7 +1008,7 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
             httpx2.AsyncClient(mounts={"ws://news.test": websocket_transport}, timeout=10) as client,
         ):
             with pytest.raises(RuntimeError, match="alpaca news stream terminated") as error:
-                await run_application(config, client, logger, stop_event)
+                await run_application(config, client, logger, stop_event, stock_starter=None)
 
         assert DUMMY_ALPACA_API_SECRET not in str(error.value)
         assert stop_event.is_set()
@@ -715,14 +1017,19 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
     asyncio.run(scenario())
 
 
+def test_run_application_fails_on_terminated_stock_handle_while_news_is_open() -> None:
+    """Verify a terminated stock handle closes the active news stream."""
+    asyncio.run(_run_terminated_stock_scenario())
+
+
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 @pytest.mark.parametrize(
     "stop_during_authentication",
     [False, True],
     ids=["after-subscription", "during-authentication"],
 )
-def test_sigterm_stops_real_news_stream_cleanly(stop_during_authentication: bool) -> None:
-    """Verify SIGTERM stops the news stream during authentication or after subscription."""
+def test_sigterm_stops_real_news_and_trade_streams_cleanly(stop_during_authentication: bool) -> None:
+    """Verify SIGTERM stops both streams during authentication or after subscription."""
     asyncio.run(_run_sigterm_subprocess_scenario(stop_during_authentication))
 
 
@@ -758,6 +1065,7 @@ def test_cli_reports_initial_alpaca_connection_failure_with_exit_one() -> None:
                     "ALPACA_API_KEY": DUMMY_FAILURE_API_KEY,
                     "ALPACA_API_SECRET": DUMMY_FAILURE_API_SECRET,
                     "ALPACA_NEWS_STREAM_URL": f"ws://127.0.0.1:{port}/v1beta1/news",
+                    "ALPACA_STOCK_STREAM_URL": f"ws://127.0.0.1:{port}/v2",
                     "DISCORD_ANALYST_WEBHOOKS": "",
                     "DISCORD_EARNINGS_WEBHOOKS": "",
                     "DISCORD_NEWS_WEBHOOKS": "",
