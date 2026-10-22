@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -38,6 +39,8 @@ KEEPALIVE_PING_TIMEOUT_SECONDS = 20
 MAX_MESSAGE_SIZE_BYTES = 16 * 1024 * 1024
 WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
 HTTP_SERVER_ERROR_STATUS_CODE = 500
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,29 +183,26 @@ async def _run_stream[EventT](
     on_terminated: Callable[[AlpacaStreamError], None] | None,
 ) -> None:
     try:
+        attempt = 1
         while not stop_event.is_set():
+            logger.info(
+                "connecting to Alpaca stream",
+                extra={"stream": config.stream_name, "attempt": attempt},
+            )
             outcome = await _read_connection(
                 config,
                 stop_event,
                 events,
                 started,
+                attempt,
             )
             if outcome is _STOPPED:
                 break
             if isinstance(outcome, _TransportFailure):
-                if not started.done():
-                    started.set_exception(
-                        _stream_failure(
-                            config.stream_name,
-                            "initial connection",
-                            outcome.error,
-                            config.api_key,
-                            config.api_secret,
-                        )
-                    )
+                next_attempt = await _handle_transport_failure(config, stop_event, started, outcome, attempt)
+                if next_attempt is None:
                     return
-                if await _wait_before_reconnect(stop_event):
-                    return
+                attempt = next_attempt
                 continue
             if isinstance(outcome, _TerminalFailure):
                 _report_terminal_failure(outcome.error, started, on_terminated)
@@ -229,11 +229,61 @@ def _report_terminal_failure(
         on_terminated(error)
 
 
+async def _handle_transport_failure[EventT](
+    config: _StreamConfig[EventT],
+    stop_event: asyncio.Event,
+    started: asyncio.Future[None],
+    outcome: _TransportFailure,
+    attempt: int,
+) -> int | None:
+    """Handle startup transport errors or schedule a retry after an established stream fails."""
+    if not started.done():
+        started.set_exception(
+            _stream_failure(
+                config.stream_name,
+                "initial connection",
+                outcome.error,
+                config.api_key,
+                config.api_secret,
+            )
+        )
+        return None
+    if stop_event.is_set():
+        return None
+
+    next_attempt = attempt + 1
+    _log_reconnect(config, outcome.error, next_attempt)
+    if await _wait_before_reconnect(stop_event):
+        return None
+    return next_attempt
+
+
+def _log_reconnect[EventT](config: _StreamConfig[EventT], error: Exception, attempt: int) -> None:
+    """Log a retry attempt with a credential-safe summary of its transport failure."""
+    failure_summary = _stream_failure(
+        config.stream_name,
+        "connection",
+        error,
+        config.api_key,
+        config.api_secret,
+    )
+    logger.warning(
+        "reconnecting Alpaca stream",
+        extra={
+            "stream": config.stream_name,
+            "attempt": attempt,
+            "retry_delay_seconds": RECONNECT_DELAY_SECONDS,
+            "error_summary": str(failure_summary),
+        },
+    )
+
+
 async def _read_connection[EventT](
     config: _StreamConfig[EventT],
     stop_event: asyncio.Event,
     events: asyncio.Queue[EventT],
     started: asyncio.Future[None],
+    attempt: int,
 ) -> _Stopped | _TransportFailure | _TerminalFailure:
     try:
         async with config.client.websocket(
@@ -242,10 +292,14 @@ async def _read_connection[EventT](
             keepalive_ping_interval_seconds=KEEPALIVE_PING_INTERVAL_SECONDS,
             keepalive_ping_timeout_seconds=KEEPALIVE_PING_TIMEOUT_SECONDS,
         ) as websocket:
+            logger.info(
+                "connected to Alpaca stream",
+                extra={"stream": config.stream_name, "attempt": attempt},
+            )
             # Catch expected failures before leaving the context so HTTPX2's
             # task group does not wrap them in an ExceptionGroup.
             try:
-                pending_messages = await _authenticate_and_subscribe(config, websocket, stop_event)
+                pending_messages = await _authenticate_and_subscribe(config, websocket, stop_event, attempt)
                 if stop_event.is_set():
                     return _STOPPED
                 if not started.done():
@@ -265,14 +319,28 @@ async def _authenticate_and_subscribe[EventT](
     config: _StreamConfig[EventT],
     websocket: AsyncWebSocketSession,
     stop_event: asyncio.Event,
+    attempt: int,
 ) -> list[dict[str, object]]:
     await websocket.send_json({"action": "auth", "key": config.api_key, "secret": config.api_secret})
     pending_messages = await _wait_for_ack(config, websocket, stop_event, "authentication")
     if pending_messages is None:
         return []
+    logger.info(
+        "authenticated Alpaca stream",
+        extra={"stream": config.stream_name, "attempt": attempt},
+    )
     await websocket.send_json({"action": "subscribe", config.channel: config.symbols})
     subscription_messages = await _wait_for_ack(config, websocket, stop_event, "subscription")
     if subscription_messages is not None:
+        logger.info(
+            "subscribed to Alpaca stream",
+            extra={
+                "stream": config.stream_name,
+                "attempt": attempt,
+                "channel": config.channel,
+                "symbols": config.symbols,
+            },
+        )
         pending_messages.extend(subscription_messages)
     return pending_messages
 
