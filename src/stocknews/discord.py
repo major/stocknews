@@ -67,13 +67,19 @@ def analyst_payload(
     stock_logo: str,
     transparent_png: str,
 ) -> WebhookPayload | None:
-    """Build an analyst payload, suppressing newly announced and maintained targets."""
+    """Build an analyst embed, keeping rating changes even without a target."""
     report = parse_analyst(headline)
     action = report.price_target_action
-    if action in {"Announces", "Maintains"}:
+    rating_action = report.action.casefold()
+    is_rating_change = rating_action in {"upgrades", "downgrades"}
+    if action in {"Announces", "Maintains"} and not is_rating_change:
         return None
 
-    if action == "Lowers":
+    if rating_action == "downgrades":
+        emoji, color = "💔", _LOWERS_COLOR
+    elif rating_action == "upgrades":
+        emoji, color = "💚", _RAISES_COLOR
+    elif action == "Lowers":
         emoji, color = "💔", _LOWERS_COLOR
     elif action == "Raises":
         emoji, color = "💚", _RAISES_COLOR
@@ -81,7 +87,14 @@ def analyst_payload(
         emoji, color = "❓", 0
 
     ticker_prefix = f"{symbol}: " if symbol else ""
-    title = f"{emoji} {ticker_prefix}{report.stock} ${report.price_target:.2f}"
+    if report.price_target > 0:
+        details = f"{report.stock} ${report.price_target:.2f}"
+    elif is_rating_change and report.guidance:
+        display_action = "Upgraded" if rating_action == "upgrades" else "Downgraded"
+        details = f"{report.stock} {display_action} to {report.guidance}".strip()
+    else:
+        details = " ".join(part for part in (report.stock, report.guidance) if part)
+    title = f"{emoji} {ticker_prefix}{details}".rstrip()
     embed = _new_embed(
         title,
         stock_logo,

@@ -95,14 +95,24 @@ def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
             0x4CAF50,
         ),
         (
+            "Goldman Sachs Maintains Buy on Apple, Lowers Price Target to $200",
+            "💔 AAPL: Apple $200.00",
+            0xD42020,
+        ),
+        (
+            "Goldman Sachs Maintains Buy on Apple, Confirms positive outlook",
+            "❓ AAPL: Apple Buy",
+            0,
+        ),
+        (
             "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135",
             "💔 AMZN: Amazon $135.00",
             0xD42020,
         ),
         (
             "Baird Upgrades Apple to Outperform, Confirms positive outlook",
-            "❓ AAPL: Apple $0.00",
-            0,
+            "💚 AAPL: Apple Upgraded to Outperform",
+            0x4CAF50,
         ),
     ],
 )
@@ -145,10 +155,94 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
 
 
 @pytest.mark.parametrize(
+    ("headline", "symbol", "title", "color"),
+    [
+        (
+            "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target",
+            "CME",
+            "💚 CME: CME Group $367.00",
+            0x4CAF50,
+        ),
+        (
+            "Argus Research Downgrades Alcoa to Hold",
+            "AA",
+            "💔 AA: Alcoa Downgraded to Hold",
+            0xD42020,
+        ),
+        (
+            "Argus Research Upgrades Equifax to Buy",
+            "EFX",
+            "💚 EFX: Equifax Upgraded to Buy",
+            0x4CAF50,
+        ),
+        (
+            "Citizens Upgrades Omega Healthcare Invts to Market Outperform",
+            "OHI",
+            "💚 OHI: Omega Healthcare Invts Upgraded to Market Outperform",
+            0x4CAF50,
+        ),
+    ],
+)
+def test_analyst_payload_keeps_rating_changes_without_positive_target(
+    headline: str,
+    symbol: str,
+    title: str,
+    color: int,
+) -> None:
+    """Show rating changes even when the headline has no positive target."""
+    payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert embed["title"] == title
+    assert embed["description"] == headline
+    assert embed["color"] == color
+
+
+@pytest.mark.parametrize(
+    ("headline", "title", "color"),
+    [
+        (
+            "Firm Upgrades Example Corp to Buy, Maintains Price Target at $100",
+            "💚 EX: Example Corp $100.00",
+            0x4CAF50,
+        ),
+        (
+            "Firm Upgrades Example Corp to Buy, lowers Price Target to $90",
+            "💚 EX: Example Corp $90.00",
+            0x4CAF50,
+        ),
+        (
+            "Firm Downgrades Example Corp to Sell, Raises Price Target to $110",
+            "💔 EX: Example Corp $110.00",
+            0xD42020,
+        ),
+        (
+            "Firm upGRADES Example Corp to Buy, Raises Price Target to $110",
+            "💚 EX: Example Corp $110.00",
+            0x4CAF50,
+        ),
+    ],
+)
+def test_rating_direction_takes_priority_over_target_direction(
+    headline: str,
+    title: str,
+    color: int,
+) -> None:
+    """Use rating direction for upgraded and downgraded analyst reports."""
+    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert payload["embeds"][0]["title"] == title
+    assert payload["embeds"][0]["color"] == color
+
+
+@pytest.mark.parametrize(
     "headline",
     [
         "Piper Sandler Initiates Coverage on Nvidia to Overweight, Announces Price Target to $850",
         "Goldman Sachs Maintains Buy on Apple, Maintains Price Target at $223",
+        "Wedbush Assumes Rithm Capital at Outperform, Announces Price Target of $10",
     ],
 )
 def test_analyst_payload_suppresses_announced_or_maintained_targets(headline: str) -> None:
