@@ -237,10 +237,10 @@ def test_trade_stream_reconnects_on_disconnect_and_resubscribes_to_iex(monkeypat
     ],
     ids=["provider-error-redacts-credentials", "missing-error-details-use-safe-fallback"],
 )
-def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
+def test_initial_news_auth_failure_is_raised_without_exposing_credentials(
     response: dict[str, object], diagnostic: str
 ) -> None:
-    """Keep credentials out of errors and tracebacks when initial trade authentication fails.
+    """Keep credentials out of errors and tracebacks when initial news authentication fails.
 
     Args:
         response: Authentication response sent by the provider.
@@ -261,13 +261,13 @@ def test_initial_trade_auth_failure_is_raised_without_exposing_credentials(
         stop_event = asyncio.Event()
         async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
             with pytest.raises(alpaca.AlpacaStreamError) as error:
-                await alpaca.start_trade_stream(
+                await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
                         api_key=AUTH_FAILURE_API_KEY,
                         api_secret=AUTH_FAILURE_API_CREDENTIAL,
-                        news_stream_url="ws://unused.test/v1beta1/news",
-                        stock_stream_url="ws://alpaca.test/v2",
+                        news_stream_url="ws://alpaca.test/v1beta1/news",
+                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
@@ -651,22 +651,93 @@ def test_terminal_protocol_error_without_callback_raises_from_stream_task() -> N
             await receive()
             await _send_json(send, {"T": "success", "msg": "authenticated"})
             await receive()
-            await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+            await _send_json(send, {"T": "subscription", "news": ["*"]})
             await _send_json(send, {"T": "error", "code": 403, "msg": "stream revoked"})
 
         async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
-            stream = await alpaca.start_trade_stream(
+            stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
-                    news_stream_url="ws://unused.test/v1beta1/news",
-                    stock_stream_url="ws://alpaca.test/v2",
+                    news_stream_url="ws://alpaca.test/v1beta1/news",
+                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=asyncio.Event(),
             )
             with pytest.raises(alpaca.AlpacaStreamError, match="stream revoked"):
                 await stream.task
+
+    asyncio.run(scenario())
+
+
+class _StopOnActionWebSocket:
+    """Script a stop request when the selected protocol action is sent."""
+
+    def __init__(self, stop_event: asyncio.Event, stop_after_action: str) -> None:
+        """Save the stop event and action that trigger shutdown."""
+        self.stop_event = stop_event
+        self.stop_after_action = stop_after_action
+        self.requests: list[dict[str, object]] = []
+        self.receive_count = 0
+
+    async def send_json(self, message: dict[str, object]) -> None:
+        """Record a wire-normalized request and synchronously stop after the selected action."""
+        self.requests.append(
+            {key: list(value) if isinstance(value, tuple) else value for key, value in message.items()}
+        )
+        if message["action"] == self.stop_after_action:
+            self.stop_event.set()
+
+    async def receive_json(self, **_: object) -> object:
+        """Return the auth acknowledgment, rejecting reads after shutdown."""
+        self.receive_count += 1
+        assert not self.stop_event.is_set()
+        assert self.requests
+        assert self.requests[-1]["action"] == "auth"
+        return {"T": "success", "msg": "authenticated"}
+
+
+@pytest.mark.parametrize("stopped_stage", ["auth", "subscription"], ids=["auth", "subscription"])
+def test_news_handshake_stops_without_reading_the_next_ack(stopped_stage: str) -> None:
+    """Stop deterministically during either news handshake stage.
+
+    Args:
+        stopped_stage: Handshake action that synchronously sets the stop event.
+    """
+
+    async def scenario() -> None:
+        """Arrange a news stream and stop after the selected request."""
+        stop_event = asyncio.Event()
+        stop_after_action = "auth" if stopped_stage == "auth" else "subscribe"
+        websocket = _StopOnActionWebSocket(stop_event, stop_after_action)
+        async with httpx2.AsyncClient() as client:
+            config = alpaca._StreamConfig(  # noqa: SLF001
+                client=client,
+                url="ws://alpaca.test/v1beta1/news",
+                api_key=NEWS_TEST_API_KEY,
+                api_secret=NEWS_TEST_API_CREDENTIAL,
+                stream_name="news",
+                channel="news",
+                symbols=("*",),
+                parse_event=alpaca._parse_news,  # noqa: SLF001
+            )
+            pending_messages = await alpaca._authenticate_and_subscribe(  # noqa: SLF001
+                config,
+                cast("httpx2.websockets.AsyncWebSocketSession", websocket),
+                stop_event,
+            )
+
+        expected_requests = [{"action": "auth", "key": NEWS_TEST_API_KEY, "secret": NEWS_TEST_API_CREDENTIAL}]
+        expected_receive_count = 0
+        if stopped_stage == "subscription":
+            expected_requests.append({"action": "subscribe", "news": ["*"]})
+            expected_receive_count = 1
+
+        assert stop_event.is_set()
+        assert websocket.requests == expected_requests
+        assert websocket.receive_count == expected_receive_count
+        assert pending_messages == []
 
     asyncio.run(scenario())
 
@@ -707,7 +778,7 @@ def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None
 
 
 def test_established_subscription_failure_uses_terminal_callback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Report resubscription failures through the callback without setting the stop event."""
+    """Report news resubscription failures without setting the stop event."""
 
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
@@ -732,7 +803,7 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
                 if message["action"] == "auth":
                     await _send_json(send, {"T": "success", "msg": "authenticated"})
                 elif connection_count == 1:
-                    await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+                    await _send_json(send, {"T": "subscription", "news": ["*"]})
                     await send({"type": "websocket.close", "code": 1001, "reason": "reconnect"})
                     return
                 else:
@@ -749,13 +820,13 @@ def test_established_subscription_failure_uses_terminal_callback(monkeypatch: py
         stop_event = asyncio.Event()
         terminal_errors: list[alpaca.AlpacaStreamError] = []
         async with ASGIWebSocketTransport(app) as transport, httpx2.AsyncClient(transport=transport) as client:
-            stream = await alpaca.start_trade_stream(
+            stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
                     api_key=REDACTION_TEST_API_KEY,
                     api_secret=REDACTION_TEST_API_CREDENTIAL,
-                    news_stream_url="ws://unused.test/v1beta1/news",
-                    stock_stream_url="ws://alpaca.test/v2",
+                    news_stream_url="ws://alpaca.test/v1beta1/news",
+                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=stop_event,
                 on_terminated=terminal_errors.append,
@@ -1019,11 +1090,11 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 @pytest.mark.parametrize(
     "acknowledged",
-    [["SPY"], "SPY", ["SPY", 17]],
+    [[], "*", ["*", 17]],
     ids=["missing-requested-symbol", "wrong-acknowledgement-type", "non-text-symbol"],
 )
 def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: object) -> None:
-    """Reject trade subscriptions that do not acknowledge every requested symbol.
+    """Reject news subscriptions with an invalid acknowledgment.
 
     Args:
         acknowledged: Symbols or malformed data returned in the acknowledgment.
@@ -1041,18 +1112,18 @@ def test_loopback_subscription_ack_requires_all_requested_symbols(acknowledged: 
             await _next_client_message(reader, writer, websocket)
             await _send_ws_json(writer, websocket, {"T": "success", "msg": "authenticated"})
             await _next_client_message(reader, writer, websocket)
-            await _send_ws_json(writer, websocket, {"T": "subscription", "trades": acknowledged})
+            await _send_ws_json(writer, websocket, {"T": "subscription", "news": acknowledged})
             await _next_client_message(reader, writer, websocket)
 
         async with _LoopbackServer(handler) as server, httpx2.AsyncClient() as client:
-            with pytest.raises(alpaca.AlpacaStreamError, match="incomplete trades subscription"):
-                await alpaca.start_trade_stream(
+            with pytest.raises(alpaca.AlpacaStreamError, match="incomplete news subscription"):
+                await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
-                        news_stream_url="ws://unused.test/v1beta1/news",
-                        stock_stream_url=f"{server.url}/v2",
+                        news_stream_url=f"{server.url}/v1beta1/news",
+                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=asyncio.Event(),
                 )
@@ -1094,8 +1165,13 @@ def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest
                         writer,
                         websocket,
                         [
-                            {"T": "subscription", "trades": ["SPY", "QQQ"]},
-                            {"T": "t", "S": "SPY", "p": 500, "s": 1},
+                            {"T": "subscription", "news": ["*"]},
+                            {
+                                "T": "n",
+                                "symbols": ["SPY"],
+                                "author": "Benzinga Newsdesk",
+                                "headline": "Market update",
+                            },
                         ],
                     )
                     writer.write(websocket.send(CloseConnection(1012, "restart")))
@@ -1106,23 +1182,23 @@ def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest
             stop_event = asyncio.Event()
             terminal: list[alpaca.AlpacaStreamError] = []
             async with httpx2.AsyncClient() as client:
-                stream = await alpaca.start_trade_stream(
+                stream = await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
-                        news_stream_url="ws://unused.test/v1beta1/news",
-                        stock_stream_url=f"{server.url}/v2",
+                        news_stream_url=f"{server.url}/v1beta1/news",
+                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                     on_terminated=terminal.append,
                 )
                 await asyncio.wait_for(stream.task, timeout=2)
-                trades = [stream.events.get_nowait(), stream.events.get_nowait()]
+                news_items = [stream.events.get_nowait(), stream.events.get_nowait()]
 
-            assert server.paths == ["/v2/iex"] * 4
+            assert server.paths == ["/v1beta1/news"] * 4
             assert [request["action"] for request in requests] == ["auth", "subscribe", "auth", "subscribe"]
-            assert [trade.symbol for trade in trades] == ["SPY", "SPY"]
+            assert [item.symbols for item in news_items] == [("SPY",), ("SPY",)]
             assert len(terminal) == 1
             assert "HTTP 401" in str(terminal[0])
             assert server.connection_count == expected_connection_count
@@ -1248,27 +1324,36 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
                         if request["action"] == "auth":
                             await _send_ws_json(writer, websocket, {"T": "success", "msg": "authenticated"})
                         else:
-                            await _send_ws_json(writer, websocket, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+                            await _send_ws_json(writer, websocket, {"T": "subscription", "news": ["*"]})
                             subscribed = True
                             if number == recovered_connection_number:
-                                await _send_ws_json(writer, websocket, {"T": "t", "S": "QQQ", "p": 480, "s": 1})
+                                await _send_ws_json(
+                                    writer,
+                                    websocket,
+                                    {
+                                        "T": "n",
+                                        "symbols": ["QQQ"],
+                                        "author": "Benzinga Newsdesk",
+                                        "headline": "Market update",
+                                    },
+                                )
 
         async with _LoopbackServer(handler) as server:
             stop_event = asyncio.Event()
             async with httpx2.AsyncClient() as client:
-                stream = await alpaca.start_trade_stream(
+                stream = await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
-                        news_stream_url="ws://unused.test/v1beta1/news",
-                        stock_stream_url=f"{server.url}/v2",
+                        news_stream_url=f"{server.url}/v1beta1/news",
+                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
                 await asyncio.wait_for(ping_seen.wait(), timeout=2)
-                trade = await asyncio.wait_for(stream.events.get(), timeout=2)
-                assert trade.symbol == "QQQ"
+                item = await asyncio.wait_for(stream.events.get(), timeout=2)
+                assert item.symbols == ("QQQ",)
                 assert [request["action"] for request in requests] == ["auth", "subscribe", "auth", "subscribe"]
                 stop_event.set()
                 await asyncio.wait_for(stream.task, timeout=2)
@@ -1318,26 +1403,34 @@ def test_httpx2_ping_transport_groups_reconnect_and_resubscribe(
                 if request["action"] == "auth":
                     await _send_json(send, {"T": "success", "msg": "authenticated"})
                 else:
-                    await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+                    await _send_json(send, {"T": "subscription", "news": ["*"]})
                     if connection_count == recovered_connection_count:
-                        await _send_json(send, {"T": "t", "S": "SPY", "p": 500, "s": 1})
+                        await _send_json(
+                            send,
+                            {
+                                "T": "n",
+                                "symbols": ["SPY"],
+                                "author": "Benzinga Newsdesk",
+                                "headline": "Market update",
+                            },
+                        )
 
         transport = _PingFailureTransport(app, {1: network_error("injected keepalive failure")})
         stop_event = asyncio.Event()
         async with transport, httpx2.AsyncClient(transport=transport) as client:
-            stream = await alpaca.start_trade_stream(
+            stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
                     api_key=TEST_API_KEY,
                     api_secret=TEST_API_CREDENTIAL,
-                    news_stream_url="ws://unused.test/v1beta1/news",
-                    stock_stream_url="ws://alpaca.test/v2",
+                    news_stream_url="ws://alpaca.test/v1beta1/news",
+                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=stop_event,
             )
             assert await asyncio.wait_for(transport.ping_failures.get(), timeout=2) == 1
-            trade = await asyncio.wait_for(stream.events.get(), timeout=2)
-            assert trade.symbol == "SPY"
+            item = await asyncio.wait_for(stream.events.get(), timeout=2)
+            assert item.symbols == ("SPY",)
             assert transport.connection_count == recovered_connection_count
             assert [request["action"] for request in requests[:4]] == ["auth", "subscribe", "auth", "subscribe"]
             stop_event.set()
@@ -1375,7 +1468,7 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
                 if request["action"] == "auth":
                     await _send_json(send, {"T": "success", "msg": "authenticated"})
                 else:
-                    await _send_json(send, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+                    await _send_json(send, {"T": "subscription", "news": ["*"]})
 
         mixed_error = ExceptionGroup(
             f"ping failed while handling {REDACTION_TEST_API_CREDENTIAL}",
@@ -1387,13 +1480,13 @@ def test_httpx2_mixed_ping_exception_group_terminates_without_leaking_secrets(
         transport = _PingFailureTransport(app, {1: mixed_error})
         terminal: list[alpaca.AlpacaStreamError] = []
         async with transport, httpx2.AsyncClient(transport=transport) as client:
-            stream = await alpaca.start_trade_stream(
+            stream = await alpaca.start_news_stream(
                 client,
                 settings=AlpacaSettings(
                     api_key=REDACTION_TEST_API_KEY,
                     api_secret=REDACTION_TEST_API_CREDENTIAL,
-                    news_stream_url="ws://unused.test/v1beta1/news",
-                    stock_stream_url="ws://alpaca.test/v2",
+                    news_stream_url="ws://alpaca.test/v1beta1/news",
+                    stock_stream_url="ws://unused.test/v2",
                 ),
                 stop_event=asyncio.Event(),
                 on_terminated=terminal.append,
@@ -1553,7 +1646,7 @@ def test_loopback_stop_cancels_reconnect_backoff() -> None:
             await _next_client_message(reader, writer, websocket)
             await _send_ws_json(writer, websocket, {"T": "success", "msg": "authenticated"})
             await _next_client_message(reader, writer, websocket)
-            await _send_ws_json(writer, websocket, {"T": "subscription", "trades": ["SPY", "QQQ"]})
+            await _send_ws_json(writer, websocket, {"T": "subscription", "news": ["*"]})
             writer.write(websocket.send(CloseConnection(1012, "restart")))
             await writer.drain()
             await _next_client_message(reader, writer, websocket)
@@ -1561,13 +1654,13 @@ def test_loopback_stop_cancels_reconnect_backoff() -> None:
         async with _LoopbackServer(handler) as server:
             stop_event = ObservedStopEvent()
             async with httpx2.AsyncClient() as client:
-                stream = await alpaca.start_trade_stream(
+                stream = await alpaca.start_news_stream(
                     client,
                     settings=AlpacaSettings(
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
-                        news_stream_url="ws://unused.test/v1beta1/news",
-                        stock_stream_url=f"{server.url}/v2",
+                        news_stream_url=f"{server.url}/v1beta1/news",
+                        stock_stream_url="ws://unused.test/v2",
                     ),
                     stop_event=stop_event,
                 )
