@@ -480,6 +480,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 ]
             },
             "/analyst": {
+                "username": "Analyst Wire · Goldman Sachs",
                 "embeds": [
                     {
                         "author": {
@@ -488,7 +489,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                         },
                         "color": 0x4CAF50,
                     }
-                ]
+                ],
             },
             "/news": {
                 "embeds": [
