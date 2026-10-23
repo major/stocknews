@@ -85,6 +85,7 @@ def analyst_payload(
 
     title = _analyst_title(symbol, company_name, report, headline)
     embed: Embed = {"title": _limit_embed_text(title, _TITLE_LIMIT), "color": _analyst_color(report, rating_action)}
+    embed["image"] = {"url": transparent_png}
     if symbol:
         embed["thumbnail"] = {"url": stock_logo.replace("%s", symbol.lower())}
 
