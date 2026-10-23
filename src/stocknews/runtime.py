@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from html import unescape
 from typing import TYPE_CHECKING, cast
 
+from stocknews.asset_names import AssetNameCache
 from stocknews.discord import (
     WebhookPayload,
     analyst_payload,
@@ -46,6 +47,7 @@ class _RunState:
     news_iterator: AsyncIterator[NewsItem] | None = None
     news_read: asyncio.Task[NewsItem | _STREAM_ENDED] | None = None
     worker_cancelled: bool = False
+    asset_names: AssetNameCache | None = None
 
     def cancel_worker(self) -> None:
         if self.worker is not None and not self.worker_cancelled:
@@ -215,6 +217,24 @@ async def _process_news_read(
         },
     )
     delivery = _make_delivery(message, config, logger)
+    if (
+        delivery is not None
+        and delivery.kind == "analyst"
+        and delivery.symbol
+        and delivery.webhooks
+        and state.asset_names is not None
+    ):
+        company_name = await state.asset_names.get(delivery.symbol)
+        if company_name:
+            named_payload = analyst_payload(
+                delivery.symbol,
+                unescape(message.headline),
+                config.stock_logo,
+                config.transparent_png,
+                company_name=company_name,
+            )
+            if named_payload is not None:
+                delivery = replace(delivery, payload=named_payload)
     if delivery is not None:
         await state.jobs.put(delivery)
     if state.news_iterator is None:
@@ -315,7 +335,15 @@ async def run(
     by the stream factory indicate a connection error; iteration errors indicate
     an established stream failure.
     """
-    state = _RunState(asyncio.Queue(maxsize=DELIVERY_QUEUE_CAPACITY))
+    state = _RunState(
+        asyncio.Queue(maxsize=DELIVERY_QUEUE_CAPACITY),
+        asset_names=AssetNameCache(
+            client,
+            config.alpaca_api_key,
+            config.alpaca_api_secret,
+            base_url=config.alpaca_assets_url,
+        ),
+    )
     normal_completion = False
 
     try:

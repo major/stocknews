@@ -1,6 +1,7 @@
 """Load application settings from an explicit environment mapping."""
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from stocknews.models import Config
 
@@ -8,6 +9,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 _DEFAULT_ALPACA_NEWS_REST_URL = "https://data.alpaca.markets/v1beta1/news"
+_DEFAULT_ALPACA_ASSETS_URL = "https://api.alpaca.markets"
+_MAX_URL_PORT = 65535
 _DEFAULT_NEWS_POLL_INTERVAL_SECONDS = 300
 _DEFAULT_NEWS_POLL_OVERLAP_SECONDS = 600
 _DEFAULT_NEWS_STATE_PATH = ".stocknews/news.sqlite3"
@@ -41,6 +44,11 @@ def load_config(environ: Mapping[str, str]) -> Config:
     return Config(
         alpaca_api_key=api_key,
         alpaca_api_secret=api_secret,
+        alpaca_assets_url=_http_base_url_env(
+            environ,
+            "ALPACA_ASSETS_URL",
+            _DEFAULT_ALPACA_ASSETS_URL,
+        ),
         alpaca_news_rest_url=_nonblank_env(
             environ,
             "ALPACA_NEWS_REST_URL",
@@ -58,6 +66,27 @@ def load_config(environ: Mapping[str, str]) -> Config:
         stock_logo=environ.get("STOCK_LOGO", _DEFAULT_STOCK_LOGO),
         transparent_png=environ.get("TRANSPARENT_PNG", _DEFAULT_TRANSPARENT_PNG),
     )
+
+
+def _http_base_url_env(environ: Mapping[str, str], key: str, default: str) -> str:
+    """Read and validate an absolute HTTP or HTTPS base URL."""
+    value = environ.get(key, default)
+    error_message = f"{key} must be an absolute HTTP or HTTPS URL without userinfo, query, or fragment"
+    if not value.strip() or any(character.isspace() for character in value):
+        raise ValueError(error_message)
+
+    try:
+        parsed = urlsplit(value)
+        has_valid_scheme = parsed.scheme.lower() in {"http", "https"}
+        has_valid_authority = bool(parsed.hostname) and parsed.username is None and parsed.password is None
+        port = parsed.port
+        has_valid_port = port is None or 0 <= port <= _MAX_URL_PORT
+    except ValueError:
+        raise ValueError(error_message) from None
+
+    if not has_valid_scheme or not has_valid_authority or not has_valid_port or parsed.query or parsed.fragment:
+        raise ValueError(error_message)
+    return value.rstrip("/")
 
 
 def _nonblank_env(environ: Mapping[str, str], key: str, default: str) -> str:

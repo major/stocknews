@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from contextlib import contextmanager
@@ -110,6 +111,29 @@ def _config() -> Config:
         stock_logo=_STOCK_LOGO,
         transparent_png=_TRANSPARENT_PNG,
     )
+
+
+def _runtime_transport(webhook_handler: Any) -> httpx2.MockTransport:
+    """Route asset lookups to canned names and delegate webhook requests."""
+    asset_names = {
+        "AAPL": "Apple",
+        "AA": "Alcoa",
+        "EFX": "Equifax",
+        "OHI": "Omega Healthcare",
+        "CME": "CME Group",
+    }
+
+    async def dispatch(request: httpx2.Request) -> httpx2.Response:
+        """Respond to Alpaca asset GETs and forward all other requests."""
+        if request.method == "GET" and request.url.path.startswith("/v2/assets/"):
+            symbol = request.url.path.removeprefix("/v2/assets/")
+            return httpx2.Response(200, json={"name": asset_names.get(symbol, "Apple")})
+        response = webhook_handler(request)
+        if inspect.isawaitable(response):
+            return await response
+        return response
+
+    return httpx2.MockTransport(dispatch)
 
 
 @pytest.fixture(autouse=True)
@@ -296,7 +320,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -321,14 +345,13 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 ]
             },
             "/analyst": {
-                "username": "Analyst Wire · Goldman Sachs",
+                "username": "Analyst Wire",
                 "embeds": [
                     {
-                        "author": {
-                            "name": "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
-                            "icon_url": "https://static.stocktitan.net/company-logo/aapl.webp",
-                        },
+                        "title": "AAPL · Apple",
                         "color": 0x4CAF50,
+                        "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
+                        "description": "Target raised to $223 · Buy maintained · Goldman Sachs",
                     }
                 ],
             },
@@ -342,6 +365,213 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 ]
             },
         }
+
+    asyncio.run(scenario())
+
+
+def test_analyst_asset_name_lookup_uses_auth_configured_url_and_cache() -> None:
+    """Verify analyst lookups use Alpaca credentials, the configured URL, and cached names."""
+
+    async def scenario() -> None:
+        """Send two analyst items for one ticker and inspect shared-client requests."""
+        asset_requests: list[httpx2.Request] = []
+        webhook_payloads: list[dict[str, object]] = []
+        expected_report_count = 2
+        item = NewsItem(
+            symbols=("AAPL",),
+            author="Benzinga Newsdesk",
+            headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+        )
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Return an asset name or record the webhook payload."""
+            if request.method == "GET":
+                asset_requests.append(request)
+                return httpx2.Response(200, json={"name": "Apple Inc."})
+            webhook_payloads.append(json.loads(request.content))
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return two analyst reports for the same ticker."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield both reports in order."""
+                yield item
+                yield item
+
+            return events()
+
+        config = replace(_config(), alpaca_assets_url="https://assets.example.test")
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(config, client, _logger(StringIO()), connect_news)
+
+        assert len(asset_requests) == 1
+        asset_request = asset_requests[0]
+        assert asset_request.method == "GET"
+        assert str(asset_request.url) == "https://assets.example.test/v2/assets/AAPL"
+        assert asset_request.headers["APCA-API-KEY-ID"] == _DUMMY_ALPACA_API_KEY
+        assert asset_request.headers["APCA-API-SECRET-KEY"] == _DUMMY_ALPACA_API_SECRET
+        assert len(webhook_payloads) == expected_report_count
+        assert all(payload["username"] == "Analyst Wire" for payload in webhook_payloads)
+        assert all(payload["embeds"][0]["title"] == "AAPL · Apple Inc." for payload in webhook_payloads)
+        assert all(
+            payload["embeds"][0]["description"] == "Target raised to $223 · Buy maintained · Goldman Sachs"
+            for payload in webhook_payloads
+        )
+
+    asyncio.run(scenario())
+
+
+def test_analyst_asset_lookup_failure_does_not_block_webhook_delivery() -> None:
+    """Verify asset lookup errors leave analyst webhook delivery operational."""
+
+    async def scenario() -> None:
+        """Return an asset API failure and confirm the webhook still receives its payload."""
+        requested: list[httpx2.Request] = []
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Fail asset lookups and accept webhook posts."""
+            requested.append(request)
+            if request.method == "GET":
+                return httpx2.Response(503)
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return one valid analyst item."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield one analyst report."""
+                yield NewsItem(
+                    symbols=("AAPL",),
+                    author="Benzinga Newsdesk",
+                    headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+                )
+
+            return events()
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(StringIO()), connect_news)
+
+        assert [(request.method, request.url.path) for request in requested] == [
+            ("GET", "/v2/assets/AAPL"),
+            ("POST", "/analyst"),
+        ]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_posts"),
+    [
+        ("suppressed", 0),
+        ("filtered", 0),
+        ("disabled", 0),
+        ("other-category", 1),
+        ("no-symbol", 1),
+        ("no-webhooks", 0),
+    ],
+)
+def test_runtime_skips_asset_lookup_when_analyst_delivery_is_not_eligible(case: str, expected_posts: int) -> None:
+    """Verify only eligible analyst deliveries request an Alpaca asset name."""
+
+    async def scenario() -> None:
+        """Run the selected item case and count asset GETs and webhook POSTs."""
+        requested: list[tuple[str, str]] = []
+        analyst = NewsItem(
+            symbols=("AAPL",),
+            author="Benzinga Newsdesk",
+            headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+        )
+        items = {
+            "suppressed": NewsItem(
+                symbols=("AAPL",),
+                author="Benzinga Newsdesk",
+                headline="Piper Sandler Initiates Coverage on Nvidia to Overweight, Announces Price Target to $850",
+            ),
+            "filtered": replace(analyst, author="Someone Else"),
+            "disabled": analyst,
+            "other-category": replace(analyst, headline="Apple Q1 EPS $2.00 beat $1.80 Estimate"),
+            "no-symbol": replace(analyst, symbols=()),
+            "no-webhooks": analyst,
+        }
+        config = _config()
+        if case == "disabled":
+            config = replace(config, discord_analyst_enabled=False)
+        elif case == "no-webhooks":
+            config = replace(config, discord_analyst_webhooks=())
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Record request methods and return successful API responses."""
+            requested.append((request.method, request.url.path))
+            if request.method == "GET":
+                return httpx2.Response(200, json={"name": "Apple"})
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return only the item for this test case."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield the selected news item."""
+                yield items[case]
+
+            return events()
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(config, client, _logger(StringIO()), connect_news)
+
+        assert not [request for request in requested if request[0] == "GET"]
+        assert len([request for request in requested if request[0] == "POST"]) == expected_posts
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_during_analyst_asset_lookup_leaves_no_tasks() -> None:
+    """Verify cancellation during an asset request stops runtime tasks cleanly."""
+
+    async def scenario() -> None:
+        """Cancel a blocked Alpaca request and verify no tasks remain."""
+        lookup_started = asyncio.Event()
+        lookup_cancelled = asyncio.Event()
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Hold the asset request until runtime cancellation."""
+            if request.method == "GET":
+                lookup_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    lookup_cancelled.set()
+                    raise
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return one analyst item and keep the stream open."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield a valid analyst item once."""
+                yield NewsItem(
+                    symbols=("AAPL",),
+                    author="Benzinga Newsdesk",
+                    headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+                )
+                await asyncio.Event().wait()
+
+            return events()
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            existing_tasks = asyncio.all_tasks()
+            runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
+            try:
+                await asyncio.wait_for(lookup_started.wait(), timeout=1)
+                runtime.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(runtime, timeout=1)
+                assert lookup_cancelled.is_set()
+                assert not _tasks_started_after(existing_tasks)
+            finally:
+                if not runtime.done():
+                    runtime.cancel()
+                await asyncio.gather(runtime, return_exceptions=True)
 
     asyncio.run(scenario())
 
@@ -385,7 +615,7 @@ def test_every_received_news_item_is_logged_once_before_filtering() -> None:
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -441,7 +671,7 @@ def test_received_news_item_logs_empty_defaults_for_absent_optional_fields() -> 
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -497,7 +727,7 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -525,14 +755,14 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
             (),
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "/analyst",
-            "💚 Apple · Goldman Sachs · Buy · Target ↑ $223",
+            "Apple",
             "",
         ),
         (
             ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "/analyst",
-            "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
+            "AAPL · Apple",
             "AAPL",
         ),
         ((), "Apple announces a phone", "/news", "Apple announces a phone", ""),
@@ -603,7 +833,7 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         if route is None:
@@ -619,14 +849,14 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
         assert requested_route == route
         embed = payload["embeds"][0]
         if route == "/analyst":
-            assert embed["author"]["name"] == title
+            assert payload["username"] == "Analyst Wire"
+            assert embed["title"] == title
             if ticker:
-                assert embed["author"]["icon_url"] == _STOCK_LOGO.replace("%s", ticker.lower())
+                assert embed["thumbnail"]["url"] == _STOCK_LOGO.replace("%s", ticker.lower())
             else:
-                assert "icon_url" not in embed["author"]
+                assert "thumbnail" not in embed
             assert "image" not in embed
-            assert "thumbnail" not in embed
-            visible_title = embed["author"]["name"]
+            visible_title = embed["title"]
         else:
             assert embed["title"] == title
             thumbnail = embed["thumbnail"]["url"]
@@ -639,31 +869,31 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
 
 
 @pytest.mark.parametrize(
-    ("symbol", "headline", "author_name", "color"),
+    ("symbol", "headline", "description", "color"),
     [
         (
             "AA",
             "Argus Research Downgrades Alcoa to Hold",
-            "💔 AA · Argus Research · Downgraded to Hold",
+            "Downgraded to Hold · Argus Research",
             0xD42020,
         ),
-        ("EFX", "Argus Research Upgrades Equifax to Buy", "💚 EFX · Argus Research · Upgraded to Buy", 0x4CAF50),
+        ("EFX", "Argus Research Upgrades Equifax to Buy", "Upgraded to Buy · Argus Research", 0x4CAF50),
         (
             "OHI",
             "Citizens Upgrades Omega Healthcare Invts to Market Outperform",
-            "💚 OHI · Citizens · Upgraded to Market Outperform",
+            "Upgraded to Market Outperform · Citizens",
             0x4CAF50,
         ),
         (
             "CME",
             "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target",
-            "💚 CME · JP Morgan · Upgraded to Overweight · Target $367",
+            "Target $367 · Upgraded to Overweight · JP Morgan",
             0x4CAF50,
         ),
         (
             "AA",
             "Argus Research Downgrades Alcoa to Hold, Maintains Price Target of $32",
-            "💔 AA · Argus Research · Downgraded to Hold · Target $32",
+            "Target $32 · Downgraded to Hold · Argus Research",
             0xD42020,
         ),
     ],
@@ -672,7 +902,7 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
 def test_runtime_routes_rating_headlines_to_analyst_payloads(
     symbol: str,
     headline: str,
-    author_name: str,
+    description: str,
     color: int,
 ) -> None:
     """Verify rating headlines produce one correctly routed analyst delivery."""
@@ -696,15 +926,18 @@ def test_runtime_routes_rating_headlines_to_analyst_payloads(
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         assert len(requested) == 1
         route, payload = requested[0]
         assert route == "/analyst"
+        assert payload["username"] == "Analyst Wire"
         embed = payload["embeds"][0]
-        assert embed["author"]["name"] == author_name
-        assert "description" not in embed
+        company_names = {"AA": "Alcoa", "EFX": "Equifax", "OHI": "Omega Healthcare", "CME": "CME Group"}
+        assert embed["title"] == f"{symbol} · {company_names[symbol]}"
+        assert embed["description"] == description
+        assert embed["thumbnail"]["url"] == _STOCK_LOGO.replace("%s", symbol.lower())
         assert embed["color"] == color
         records = [json.loads(line) for line in output.getvalue().splitlines()]
         sent = [record for record in records if record["msg"] == "sent Discord webhook"]
@@ -782,7 +1015,7 @@ def test_webhook_fanout_continues_after_failure() -> None:
 
             return events()
 
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(config, client, _logger(output), connect_news)
 
         assert len(delivered) == expected_news_item_count * len(config.discord_news_webhooks)
@@ -910,7 +1143,7 @@ def test_normal_stream_completion_drains_queued_discord_deliveries(without_aclos
             return stream
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(_config(), client, _logger(output), connect_news))
             try:
@@ -942,7 +1175,7 @@ def test_cancellation_during_iterator_close_cancels_delivery_before_close_finish
 
     async def scenario() -> None:
         streams = _IteratorCloseCancellationScenario()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(streams.handle_webhook), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(streams.handle_webhook), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), streams.connect_news))
             try:
@@ -1000,7 +1233,7 @@ def test_normal_eof_reports_sanitized_iterator_close_failure() -> None:
             return NewsStream()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _request: httpx2.Response(204))) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(lambda _request: httpx2.Response(204))) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -1048,7 +1281,7 @@ def test_cancellation_reports_sanitized_pending_news_read_failure() -> None:
             return events()
 
         output = StringIO()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(_config(), client, _logger(output), connect_news))
             try:
@@ -1123,7 +1356,7 @@ def test_cancellation_during_normal_delivery_drain_cancels_http_request() -> Non
 
             return events()
 
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
             try:
                 await asyncio.wait_for(request_started.wait(), timeout=1)
@@ -1171,7 +1404,7 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
 
         logger = _logger(StringIO())
         logger.addHandler(caplog.handler)
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _request: httpx2.Response(204))) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(lambda _request: httpx2.Response(204))) as client:
             with pytest.raises(RuntimeError, match=f"alpaca news stream terminated: {news_failure_message}") as failure:
                 await run(_config(), client, logger, connect_news)
 
@@ -1222,7 +1455,7 @@ def test_classified_news_without_payload_is_logged_and_not_delivered(headline: s
 
             return events()
 
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(_config(), client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -1300,7 +1533,7 @@ def test_disabled_categories_are_skipped_without_fallback(
 
             return events()
 
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             await run(config, client, _logger(output), connect_news)
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -1351,7 +1584,7 @@ def test_repeated_cancellation_cancels_delivery_worker() -> None:
         async def connect_news() -> AsyncIterable[NewsItem]:
             return news_stream
 
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handler), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
             try:
@@ -1428,7 +1661,7 @@ def test_rest_news_burst_applies_bounded_backpressure_and_delivers_once() -> Non
             return events()
 
         config = _config()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle_webhook), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handle_webhook), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(config, client, logger, connect_news))
             try:
@@ -1504,7 +1737,7 @@ def test_cancellation_while_rest_delivery_queue_is_blocked_cleans_up() -> None: 
             return events()
 
         config = _config()
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle_webhook), timeout=10) as client:
+        async with httpx2.AsyncClient(transport=_runtime_transport(handle_webhook), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(config, client, logger, connect_news))
             try:

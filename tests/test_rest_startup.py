@@ -46,6 +46,7 @@ def _config(state_path: Path) -> Config:
         alpaca_api_key=_API_KEY,
         alpaca_api_secret=_API_SECRET,
         alpaca_news_rest_url="https://alpaca.test/v1beta1/news",
+        alpaca_assets_url="https://assets.test",
         news_poll_interval_seconds=1,
         news_poll_overlap_seconds=1,
         news_state_path=str(state_path),
@@ -87,7 +88,7 @@ async def _poll_immediately(stop_event: asyncio.Event, _interval_seconds: int) -
     await asyncio.sleep(0)
 
 
-def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(
+def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(  # noqa: PLR0915
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -97,18 +98,25 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(
     state_path = tmp_path / "news.sqlite3"
     config = _config(state_path)
     requests: list[httpx2.Request] = []
+    asset_requests: list[httpx2.Request] = []
     deliveries: list[tuple[str, str]] = []
+    analyst_payloads: list[dict[str, Any]] = []
     active_stop_event = asyncio.Event()
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
         """Serve Alpaca pages and record Discord deliveries."""
         nonlocal active_stop_event
+        if request.url.path.startswith("/v2/assets/"):
+            asset_requests.append(request)
+            return httpx2.Response(200, json={"name": "Apple Inc."})
         if request.url.host == "discord.test":
             payload = json.loads(request.content)
             embed = payload["embeds"][0]
             title = embed.get("title", embed.get("author", {}).get("name"))
             assert isinstance(title, str)
             deliveries.append((request.url.path, title))
+            if request.url.path == "/analyst":
+                analyst_payloads.append(payload)
             return httpx2.Response(204)
 
         requests.append(request)
@@ -173,9 +181,15 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(
     assert [request.url.params.get("page_token") for request in requests] == [None, "page-2", None, None]
     assert all(request.headers["APCA-API-KEY-ID"] == _API_KEY for request in requests)
     assert all(request.headers["APCA-API-SECRET-KEY"] == _API_SECRET for request in requests)
+    assert len(asset_requests) == 1
+    assert str(asset_requests[0].url) == "https://assets.test/v2/assets/AAPL"
+    assert asset_requests[0].headers["APCA-API-KEY-ID"] == _API_KEY
+    assert asset_requests[0].headers["APCA-API-SECRET-KEY"] == _API_SECRET
     assert [path for path, _title in deliveries] == ["/earnings", "/analyst", "/news", "/news", "/news"]
     assert deliveries[0][1] == "AAPL: Apple"
-    assert deliveries[1][1] == "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223"
+    assert deliveries[1][1] == "AAPL · Apple Inc."
+    assert analyst_payloads[0]["username"] == "Analyst Wire"
+    assert analyst_payloads[0]["embeds"][0]["description"] == ("Target raised to $223 · Buy maintained · Goldman Sachs")
     assert deliveries[2][1:] == ("AAPL: Apple launches a phone",)
     assert deliveries[3][1:] == ("MSFT: Microsoft launches a tablet",)
     assert deliveries[4][1:] == ("AAPL: Apple says this would be worth reading",)

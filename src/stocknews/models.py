@@ -31,6 +31,7 @@ class Config:
     discord_analyst_enabled: bool = True
     discord_earnings_enabled: bool = True
     discord_news_enabled: bool = True
+    alpaca_assets_url: str = "https://api.alpaca.markets"
     alpaca_news_rest_url: str = "https://data.alpaca.markets/v1beta1/news"
     news_poll_interval_seconds: int = 300
     news_poll_overlap_seconds: int = 600

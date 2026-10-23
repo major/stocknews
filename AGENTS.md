@@ -22,7 +22,7 @@ Read only what you need:
 ## Conventions
 
 - `ALPACA_API_KEY` and `ALPACA_API_SECRET` are required. Optional settings are
-  `ALPACA_NEWS_REST_URL`, `NEWS_POLL_INTERVAL_SECONDS`,
+  `ALPACA_NEWS_REST_URL`, `ALPACA_ASSETS_URL`, `NEWS_POLL_INTERVAL_SECONDS`,
   `NEWS_POLL_OVERLAP_SECONDS`, `NEWS_STATE_PATH`, `DISCORD_ANALYST_ENABLED`,
   `DISCORD_ANALYST_WEBHOOKS`, `DISCORD_EARNINGS_ENABLED`,
   `DISCORD_EARNINGS_WEBHOOKS`, `DISCORD_NEWS_ENABLED`, `DISCORD_NEWS_WEBHOOKS`,
@@ -34,6 +34,12 @@ Read only what you need:
   accept true/false, 1/0, yes/no, and on/off, case-insensitive with surrounding
   whitespace ignored. An explicitly empty or invalid value raises `ValueError`
   at startup. Discord webhook lists are comma-separated.
+- `ALPACA_ASSETS_URL` defaults to `https://api.alpaca.markets`; use
+  `https://paper-api.alpaca.markets` with paper-account credentials. Analyst
+  asset-name lookups run only for deliverable items and use a 1024-entry
+  in-memory LRU cache. Successful names live 24 hours, missing names 1 hour,
+  and temporary errors 1 minute. A failed refresh retains a cached name, each
+  lookup has a 2-second deadline, and the cache resets on restart.
 - Keep source in `src/stocknews/` and tests in `tests/`.
 - Use sociable tests with real internal code. Replace only external or nondeterministic boundaries.
 - Pytest blocks sockets by default. Allow loopback access only for tests that need local servers.

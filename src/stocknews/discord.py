@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import re
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 import httpx2
 
 from stocknews.analyst import parse_analyst
-from stocknews.earnings import company_name, describe_earnings
+from stocknews.earnings import company_name as earnings_company_name
+from stocknews.earnings import describe_earnings
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -20,8 +22,9 @@ _LOWERS_COLOR = 0xD42020
 _HTTP_SUCCESS_STATUS_MIN = 200
 _HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE = 300
 _WEBHOOK_DEADLINE_SECONDS = 10.0
-_AUTHOR_NAME_LIMIT = 256
-_USERNAME_LIMIT = 80
+_TITLE_LIMIT = 256
+_DESCRIPTION_LIMIT = 4096
+_DISPLAY_PRICE_RE = re.compile(r"\$(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)")
 
 
 class EmbedImage(TypedDict):
@@ -30,20 +33,12 @@ class EmbedImage(TypedDict):
     url: str
 
 
-class EmbedAuthor(TypedDict):
-    """An embed author line with an optional compact icon."""
-
-    name: str
-    icon_url: NotRequired[str]
-
-
 class Embed(TypedDict):
-    """A Discord embed with optional title, media, and author fields."""
+    """A Discord embed with optional title, media, description, color, and URL."""
 
     title: NotRequired[str]
     image: NotRequired[EmbedImage]
     thumbnail: NotRequired[EmbedImage]
-    author: NotRequired[EmbedAuthor]
     description: NotRequired[str]
     color: NotRequired[int]
     url: NotRequired[str]
@@ -67,7 +62,7 @@ def earnings_payload(
     if not description:
         return None
 
-    title = f"{symbol}: {company_name(headline)}" if symbol else company_name(headline) or headline
+    title = f"{symbol}: {earnings_company_name(headline)}" if symbol else earnings_company_name(headline) or headline
     embed = _new_embed(title, stock_logo, symbol, transparent_png)
     embed["description"] = description
     return {"embeds": [embed]}
@@ -78,75 +73,103 @@ def analyst_payload(
     headline: str,
     stock_logo: str,
     transparent_png: str,
+    company_name: str | None = None,
 ) -> WebhookPayload | None:
-    """Build an analyst embed, keeping rating changes even without a target."""
+    """Build a compact analyst embed, keeping rating changes without a target."""
     report = parse_analyst(headline)
-    firm = report.firm.strip()
-    username = f"Analyst Wire · {firm}" if firm else "Analyst Wire"
-    action = report.price_target_action
     rating_action = report.action.casefold()
-    is_rating_change = rating_action in {"upgrades", "downgrades"}
-    if action in {"Announces", "Maintains"} and not is_rating_change:
+    if _suppress_analyst_report(report, rating_action):
         return None
 
-    if rating_action == "downgrades":
-        emoji, color = "💔", _LOWERS_COLOR
-    elif rating_action == "upgrades":
-        emoji, color = "💚", _RAISES_COLOR
-    elif action == "Lowers":
-        emoji, color = "💔", _LOWERS_COLOR
-    elif action == "Raises":
-        emoji, color = "💚", _RAISES_COLOR
-    else:
-        emoji, color = "❓", 0
-
-    if report.firm:
-        author_name = _analyst_author_name(report, symbol, emoji)
-    elif symbol:
-        parts = [f"{emoji} {symbol}", headline]
-        author_name = " · ".join(part for part in parts if part)
-    else:
-        author_name = f"{emoji} {headline}".rstrip()
-
-    author_name, was_truncated = _limit_author_name(author_name)
-    author: EmbedAuthor = {"name": author_name}
+    title = _analyst_title(symbol, company_name, report, headline)
+    embed: Embed = {"title": _limit_embed_text(title, _TITLE_LIMIT), "color": _analyst_color(report, rating_action)}
     if symbol:
-        author["icon_url"] = stock_logo.replace("%s", symbol.lower())
-    embed: Embed = {"author": author}
-    if was_truncated and headline:
-        embed["description"] = headline
-    embed["color"] = color
-    return {"username": username[:_USERNAME_LIMIT], "embeds": [embed]}
+        embed["thumbnail"] = {"url": stock_logo.replace("%s", symbol.lower())}
+
+    description = _analyst_description(report, rating_action)
+    if description:
+        embed["description"] = _limit_embed_text(description, _DESCRIPTION_LIMIT)
+    return {"username": "Analyst Wire", "embeds": [embed]}
 
 
-def _analyst_author_name(report: AnalystReport, symbol: str, emoji: str) -> str:
-    """Format a parsed analyst report as one compact author line."""
-    subject = symbol or report.stock
-    parts = [f"{emoji} {subject}".strip(), report.firm]
-    rating_action = report.action.casefold()
-    if report.guidance:
-        if rating_action == "upgrades":
-            guidance = f"Upgraded to {report.guidance}"
-        elif rating_action == "downgrades":
-            guidance = f"Downgraded to {report.guidance}"
-        else:
-            guidance = report.guidance
-        parts.append(guidance)
-    if report.price_target > 0:
-        target = f"Target ${report.price_target:g}"
-        if report.price_target_action == "Raises":
-            target = f"Target ↑ ${report.price_target:g}"
-        elif report.price_target_action == "Lowers":
-            target = f"Target ↓ ${report.price_target:g}"
-        parts.append(target)
+def _suppress_analyst_report(report: AnalystReport, rating_action: str) -> bool:
+    """Return whether an announced or maintained target has no rating change."""
+    return report.price_target_action in {"Announces", "Maintains"} and rating_action not in {
+        "upgrades",
+        "downgrades",
+    }
+
+
+def _analyst_title(
+    symbol: str,
+    company_name: str | None,
+    report: AnalystReport,
+    headline: str,
+) -> str:
+    """Choose a ticker, parsed stock, or headline as the analyst embed title."""
+    if symbol and company_name and company_name.strip():
+        return f"{symbol} · {company_name.strip()}"
+    return symbol or report.stock or headline
+
+
+def _analyst_color(report: AnalystReport, rating_action: str) -> int:
+    """Choose the existing directional color for an analyst report."""
+    if rating_action == "downgrades":
+        return _LOWERS_COLOR
+    if rating_action == "upgrades":
+        return _RAISES_COLOR
+    if report.price_target_action == "Lowers":
+        return _LOWERS_COLOR
+    if report.price_target_action == "Raises":
+        return _RAISES_COLOR
+    return 0
+
+
+def _analyst_description(report: AnalystReport, rating_action: str) -> str:
+    """Format target, rating, and firm details in stable display order."""
+    if not report.firm.strip():
+        return report.headline
+    parts = [
+        _analyst_target(report),
+        _analyst_rating(report, rating_action),
+        report.firm.strip(),
+    ]
     return " · ".join(part for part in parts if part)
 
 
-def _limit_author_name(name: str) -> tuple[str, bool]:
-    """Keep an embed author within Discord's 256-character name limit."""
-    if len(name) <= _AUTHOR_NAME_LIMIT:
-        return name, False
-    return f"{name[: _AUTHOR_NAME_LIMIT - 1]}…", True
+def _analyst_target(report: AnalystReport) -> str:
+    """Format a positive target while preserving grouped digits from the headline."""
+    if report.price_target <= 0:
+        return ""
+    match = _DISPLAY_PRICE_RE.search(report.headline)
+    price = match.group(1) if match else f"{report.price_target:g}"
+    integer, decimal_point, fraction = price.partition(".")
+    price = f"{int(integer.replace(',', '')):,}{decimal_point}{fraction}"
+    if report.price_target_action == "Raises":
+        return f"Target raised to ${price}"
+    if report.price_target_action == "Lowers":
+        return f"Target lowered to ${price}"
+    return f"Target ${price}"
+
+
+def _analyst_rating(report: AnalystReport, rating_action: str) -> str:
+    """Format a rating action without changing the parser's guidance text."""
+    if not report.guidance:
+        return ""
+    if rating_action == "upgrades":
+        return f"Upgraded to {report.guidance}"
+    if rating_action == "downgrades":
+        return f"Downgraded to {report.guidance}"
+    if rating_action == "maintains":
+        return f"{report.guidance} maintained"
+    return report.guidance
+
+
+def _limit_embed_text(value: str, limit: int) -> str:
+    """Keep embed text within its Discord character limit, marking truncation."""
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 1]}…"
 
 
 def news_payload(

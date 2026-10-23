@@ -16,8 +16,8 @@ from stocknews.models import NewsItem
 
 STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 TRANSPARENT_PNG = "https://major.io/transparent.png"
-AUTHOR_NAME_LIMIT = 256
-USERNAME_LIMIT = 80
+TITLE_LIMIT = 256
+DESCRIPTION_LIMIT = 4096
 
 
 def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
@@ -91,126 +91,89 @@ def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("symbol", "headline", "title", "color", "username"),
+    ("symbol", "headline", "description", "color"),
     [
         (
             "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
-            "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
+            "Target raised to $223 · Buy maintained · Goldman Sachs",
             0x4CAF50,
-            "Analyst Wire · Goldman Sachs",
         ),
         (
             "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Lowers Price Target to $200",
-            "💔 AAPL · Goldman Sachs · Buy · Target ↓ $200",
+            "Target lowered to $200 · Buy maintained · Goldman Sachs",
             0xD42020,
-            "Analyst Wire · Goldman Sachs",
         ),
         (
             "NSC",
             "RBC Capital Maintains Sector Perform on Norfolk Southern, Raises Price Target to $350.25",
-            "💚 NSC · RBC Capital · Sector Perform · Target ↑ $350.25",
+            "Target raised to $350.25 · Sector Perform maintained · RBC Capital",
             0x4CAF50,
-            "Analyst Wire · RBC Capital",
         ),
         (
             "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Confirms positive outlook",
-            "❓ AAPL · Goldman Sachs · Buy",
+            "Buy maintained · Goldman Sachs",
             0,
-            "Analyst Wire · Goldman Sachs",
         ),
         (
             "AMZN",
             "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135",
-            "💔 AMZN · JPMorgan · Downgraded to Neutral · Target ↓ $135",
+            "Target lowered to $135 · Downgraded to Neutral · JPMorgan",
             0xD42020,
-            "Analyst Wire · JPMorgan",
         ),
         (
             "AAPL",
             "Baird Upgrades Apple to Outperform, Confirms positive outlook",
-            "💚 AAPL · Baird · Upgraded to Outperform",
+            "Upgraded to Outperform · Baird",
             0x4CAF50,
-            "Analyst Wire · Baird",
         ),
     ],
 )
-def test_analyst_payload_formats_target_action_and_unknown_fallback(
+def test_analyst_payload_formats_description_and_color(
     symbol: str,
     headline: str,
-    title: str,
+    description: str,
     color: int,
-    username: str,
 ) -> None:
-    """Format analyst targets, colors, and fallback titles in webhook embeds."""
+    """Format analyst details in target, rating, and firm order."""
     payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
 
-    expected = {
+    assert payload == {
         "embeds": [
             {
-                "author": {
-                    "name": title,
-                    "icon_url": f"https://static.stocktitan.net/company-logo/{symbol.lower()}.webp",
-                },
+                "title": symbol,
+                "description": description,
+                "thumbnail": {"url": STOCK_LOGO.replace("%s", symbol.lower())},
                 "color": color,
             }
         ],
-        "username": username,
+        "username": "Analyst Wire",
     }
-    assert payload == expected
-
-    requests: list[httpx2.Request] = []
-
-    async def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        assert json.loads(request.content) == expected
-        return httpx2.Response(204)
-
-    async def send() -> None:
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-            await send_payload(client, ["https://discord.test/webhook/analyst"], payload)
-
-    asyncio.run(send())
-    assert len(requests) == 1
 
 
-@pytest.mark.parametrize(
-    ("headline", "expected_username"),
-    [
-        (
-            "Headline without a recognized analyst format",
-            "Analyst Wire",
-        ),
-        (
-            "  Goldman Sachs   Upgrades Example Corp to Buy, Raises Price Target to $100",
-            "Analyst Wire · Goldman Sachs",
-        ),
-    ],
-)
-def test_analyst_payload_sets_wire_username_for_firm_or_fallback(
-    headline: str,
-    expected_username: str,
-) -> None:
-    """Use a clean analyst firm in the webhook username, with a fallback otherwise."""
-    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+def test_analyst_payload_uses_company_name_and_stable_username() -> None:
+    """Add an optional company name to a ticker title and keep the username stable."""
+    payload = analyst_payload(
+        "ARGX",
+        "Guggenheim Maintains Buy on argenx, Lowers Price Target to $1120",
+        STOCK_LOGO,
+        TRANSPARENT_PNG,
+        company_name="argenx",
+    )
 
-    assert payload is not None
-    assert payload["username"] == expected_username
-
-
-@pytest.mark.parametrize("firm_length", [65, 66])
-def test_analyst_payload_caps_username_at_discord_limit(firm_length: int) -> None:
-    """Keep analyst usernames at 80 characters when the firm reaches or exceeds the limit."""
-    firm = "F" * firm_length
-    headline = f"{firm} Upgrades Example Corp to Buy, Raises Price Target to $100"
-
-    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
-
-    assert payload is not None
-    assert payload["username"] == f"Analyst Wire · {firm}"[:USERNAME_LIMIT]
-    assert len(payload["username"]) == USERNAME_LIMIT
+    assert payload == {
+        "embeds": [
+            {
+                "title": "ARGX · argenx",
+                "description": "Target lowered to $1,120 · Buy maintained · Guggenheim",
+                "thumbnail": {"url": "https://static.stocktitan.net/company-logo/argx.webp"},
+                "color": 0xD42020,
+            }
+        ],
+        "username": "Analyst Wire",
+    }
 
 
 @pytest.mark.parametrize(
@@ -219,25 +182,25 @@ def test_analyst_payload_caps_username_at_discord_limit(firm_length: int) -> Non
         (
             "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target",
             "CME",
-            "💚 CME · JP Morgan · Upgraded to Overweight · Target $367",
+            "Target $367 · Upgraded to Overweight · JP Morgan",
             0x4CAF50,
         ),
         (
             "Argus Research Downgrades Alcoa to Hold",
             "AA",
-            "💔 AA · Argus Research · Downgraded to Hold",
+            "Downgraded to Hold · Argus Research",
             0xD42020,
         ),
         (
             "Argus Research Upgrades Equifax to Buy",
             "EFX",
-            "💚 EFX · Argus Research · Upgraded to Buy",
+            "Upgraded to Buy · Argus Research",
             0x4CAF50,
         ),
         (
             "Citizens Upgrades Omega Healthcare Invts to Market Outperform",
             "OHI",
-            "💚 OHI · Citizens · Upgraded to Market Outperform",
+            "Upgraded to Market Outperform · Citizens",
             0x4CAF50,
         ),
     ],
@@ -253,11 +216,11 @@ def test_analyst_payload_keeps_rating_changes_without_positive_target(
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert embed["author"]["name"] == title
-    assert "description" not in embed
+    assert embed["description"] == title
     assert embed["color"] == color
+    assert embed["thumbnail"] == {"url": STOCK_LOGO.replace("%s", symbol.lower())}
+    assert "author" not in embed
     assert "image" not in embed
-    assert "thumbnail" not in embed
 
 
 @pytest.mark.parametrize(
@@ -265,27 +228,27 @@ def test_analyst_payload_keeps_rating_changes_without_positive_target(
     [
         (
             "Firm Upgrades Example Corp to Buy, Maintains Price Target at $100",
-            "💚 EX · Firm · Upgraded to Buy · Target $100",
+            "Target $100 · Upgraded to Buy · Firm",
             0x4CAF50,
         ),
         (
             "Firm Upgrades Example Corp to Buy, Lowers Price Target to $90",
-            "💚 EX · Firm · Upgraded to Buy · Target ↓ $90",
+            "Target lowered to $90 · Upgraded to Buy · Firm",
             0x4CAF50,
         ),
         (
             "Firm Upgrades Example Corp to Buy, lowers Price Target to $90",
-            "💚 EX · Firm · Upgraded to Buy · Target $90",
+            "Target $90 · Upgraded to Buy · Firm",
             0x4CAF50,
         ),
         (
             "Firm Downgrades Example Corp to Sell, Raises Price Target to $110",
-            "💔 EX · Firm · Downgraded to Sell · Target ↑ $110",
+            "Target raised to $110 · Downgraded to Sell · Firm",
             0xD42020,
         ),
         (
             "Firm upGRADES Example Corp to Buy, Raises Price Target to $110",
-            "💚 EX · Firm · Upgraded to Buy · Target ↑ $110",
+            "Target raised to $110 · Upgraded to Buy · Firm",
             0x4CAF50,
         ),
     ],
@@ -300,14 +263,11 @@ def test_rating_direction_takes_priority_over_target_direction(
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert embed["author"] == {
-        "name": title,
-        "icon_url": "https://static.stocktitan.net/company-logo/ex.webp",
-    }
+    assert embed["description"] == title
     assert embed["color"] == color
-    assert "description" not in embed
+    assert embed["thumbnail"] == {"url": STOCK_LOGO.replace("%s", "ex")}
+    assert "author" not in embed
     assert "image" not in embed
-    assert "thumbnail" not in embed
 
 
 @pytest.mark.parametrize(
@@ -323,16 +283,16 @@ def test_analyst_payload_suppresses_announced_or_maintained_targets(headline: st
     assert analyst_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG) is None
 
 
-def test_analyst_payload_omits_empty_headline_description() -> None:
-    """Leave the description field out when the analyst headline is empty."""
+def test_analyst_payload_omits_empty_description() -> None:
+    """Leave the description field out when no analyst details were parsed."""
     payload = analyst_payload("AAPL", "", STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
     assert "description" not in payload["embeds"][0]
 
 
-def test_analyst_payload_uses_report_details_without_symbol() -> None:
-    """Keep the analyst action marker and report details without a ticker prefix."""
+def test_analyst_payload_uses_report_stock_without_symbol() -> None:
+    """Use the parsed stock as the title when there is no supplied ticker."""
     headline = "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135"
 
     payload = analyst_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
@@ -340,70 +300,83 @@ def test_analyst_payload_uses_report_details_without_symbol() -> None:
     assert payload == {
         "embeds": [
             {
-                "author": {"name": "💔 Amazon · JPMorgan · Downgraded to Neutral · Target ↓ $135"},
+                "title": "Amazon",
+                "description": "Target lowered to $135 · Downgraded to Neutral · JPMorgan",
                 "color": 0xD42020,
             }
         ],
-        "username": "Analyst Wire · JPMorgan",
+        "username": "Analyst Wire",
     }
 
 
 @pytest.mark.parametrize(
-    ("symbol", "headline", "author_name"),
+    ("symbol", "headline", "title", "thumbnail"),
     [
         (
             "AAPL",
             "Headline without a recognized analyst format",
-            "❓ AAPL · Headline without a recognized analyst format",
+            "AAPL",
+            {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
         ),
         (
             "",
             "Headline without a recognized analyst format",
-            "❓ Headline without a recognized analyst format",
+            "Headline without a recognized analyst format",
+            None,
         ),
     ],
 )
 def test_analyst_payload_uses_headline_for_unparsed_report(
     symbol: str,
     headline: str,
-    author_name: str,
+    title: str,
+    thumbnail: dict[str, str] | None,
 ) -> None:
-    """Keep unparsed analyst headlines visible in the author line."""
+    """Keep unknown reports visible through their title fallback."""
     payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert embed["author"]["name"] == author_name
-    assert embed["author"].get("icon_url") == (STOCK_LOGO.replace("%s", symbol.lower()) if symbol else None)
-    assert "description" not in embed
-
-
-def test_analyst_payload_truncates_long_parsed_author_and_keeps_headline() -> None:
-    """Keep long parsed firm names within Discord's author limit."""
-    headline = f"{'Firm ' + 'X' * 270} Upgrades Example Corp to Buy, Raises Price Target to $350"
-
-    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
-
-    assert payload is not None
-    embed = payload["embeds"][0]
-    author_name = embed["author"]["name"]
-    assert len(author_name) == AUTHOR_NAME_LIMIT
-    assert author_name.endswith("…")
+    assert embed["title"] == title
+    assert embed.get("thumbnail") == thumbnail
     assert embed["description"] == headline
+    assert "author" not in embed
 
 
-def test_analyst_payload_truncates_long_fallback_author_and_keeps_headline() -> None:
-    """Use the description only when an unparsed headline exceeds the author limit."""
-    headline = "No recognized analyst format " * 20
+def test_analyst_payload_limits_unknown_headline_description() -> None:
+    """Keep an unparsed headline visible while bounding its description length."""
+    headline = "Unrecognized analyst headline " * 200
 
     payload = analyst_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert len(embed["author"]["name"]) == AUTHOR_NAME_LIMIT
-    assert embed["author"]["name"].endswith("…")
-    assert embed["description"] == headline
-    assert embed["author"]["icon_url"] == STOCK_LOGO.replace("%s", "aapl")
+    assert embed["title"] == "AAPL"
+    assert embed["description"] == f"{headline[: DESCRIPTION_LIMIT - 1]}…"
+    assert len(embed["description"]) == DESCRIPTION_LIMIT
+
+
+def test_analyst_payload_limits_title_length() -> None:
+    """Keep a title with an unusually long company name within Discord's limit."""
+    payload = analyst_payload("EX", "Firm Upgrades Example Corp to Buy", STOCK_LOGO, TRANSPARENT_PNG, "C" * 300)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert len(embed["title"]) == TITLE_LIMIT
+    assert embed["title"].endswith("…")
+
+
+def test_analyst_payload_limits_description_length() -> None:
+    """Keep the combined analyst details within Discord's description limit."""
+    firm = "F" * (DESCRIPTION_LIMIT + 100)
+    headline = f"{firm} Upgrades Example Corp to Buy, Raises Price Target to $350"
+
+    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert len(embed["description"]) == DESCRIPTION_LIMIT
+    assert embed["description"].endswith("…")
 
 
 def test_news_payload_uses_headline_only_with_first_symbol_and_optional_url() -> None:
