@@ -1,178 +1,31 @@
 """Behavioral tests for stream orchestration and Discord delivery."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, MutableMapping
 from contextlib import contextmanager
 from dataclasses import replace
 from io import StringIO
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx2
 import pytest
-from httpx2.websockets import ASGIWebSocketTransport
 
-from stocknews.__main__ import run_application
 from stocknews.config import load_config
 from stocknews.logging import JSONFormatter, configure_logging
 from stocknews.models import Config, NewsItem
 from stocknews.runtime import _STREAM_ENDED, DELIVERY_QUEUE_CAPACITY, _next, _settle_task, run
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Iterator
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
 _RECEIPT_CONTENT_LIMIT = 250
 _DUMMY_ALPACA_CREDENTIALS = ("key", "secret")
 _DUMMY_ALPACA_API_KEY, _DUMMY_ALPACA_API_SECRET = _DUMMY_ALPACA_CREDENTIALS
-type ASGIReceive = Callable[[], Awaitable[MutableMapping[str, Any]]]
-type ASGISend = Callable[[MutableMapping[str, Any]], Awaitable[None]]
-
-
-class _ShutdownNewsASGIApp:
-    def __init__(self) -> None:
-        self.connected = asyncio.Event()
-        self.disconnected = asyncio.Event()
-
-    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
-        assert scope.get("path") == "/v1beta1/news"
-        await receive()
-        await send({"type": "websocket.accept"})
-        while True:
-            incoming = await receive()
-            if incoming.get("type") == "websocket.disconnect":
-                self.disconnected.set()
-                return
-            text = incoming.get("text")
-            assert isinstance(text, str)
-            message = json.loads(text)
-            if message["action"] == "auth":
-                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                continue
-            await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
-            await _send_websocket_json(
-                send,
-                {
-                    "T": "n",
-                    "symbols": [" AAPL "],
-                    "author": "Benzinga Newsdesk",
-                    "headline": "Apple &amp;amp; launches a phone",
-                    "summary": "Company announcement",
-                    "url": "https://example.test/news",
-                },
-            )
-            self.connected.set()
-
-
-class _ShutdownDiscordHandler:
-    def __init__(self, shutdown_mode: str) -> None:
-        self.shutdown_mode = shutdown_mode
-        self.delivered = asyncio.Event()
-        self.release_delivery = asyncio.Event()
-        self.delivery_cancelled = asyncio.Event()
-        self.received_payloads: list[dict[str, object]] = []
-
-    async def __call__(self, request: httpx2.Request) -> httpx2.Response:
-        self.received_payloads.append(json.loads(request.content))
-        self.delivered.set()
-        if self.shutdown_mode == "stop-event":
-            try:
-                await self.release_delivery.wait()
-            except asyncio.CancelledError:
-                self.delivery_cancelled.set()
-                raise
-        return httpx2.Response(204)
-
-
-class _EstablishedNewsFailureASGIApp:
-    def __init__(self, terminal_timing: str) -> None:
-        self.terminal_timing = terminal_timing
-        self.subscribed = asyncio.Event()
-        self.report_terminal_error = asyncio.Event()
-        self.disconnected = asyncio.Event()
-
-    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
-        assert scope.get("path") == "/v1beta1/news"
-        await receive()
-        await send({"type": "websocket.accept"})
-        while True:
-            incoming = await receive()
-            if incoming.get("type") == "websocket.disconnect":
-                self.disconnected.set()
-                return
-            text = incoming.get("text")
-            assert isinstance(text, str)
-            request = json.loads(text)
-            if request["action"] == "auth":
-                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                continue
-            subscription = {"T": "subscription", "news": ["*"]}
-            if self.terminal_timing == "before-consumer":
-                await _send_websocket_json(
-                    send,
-                    [subscription, {"T": "error", "code": 403, "msg": "request rejected using private-api-key"}],
-                )
-            else:
-                await _send_websocket_json(send, subscription)
-            self.subscribed.set()
-            if self.terminal_timing == "late":
-                await self.report_terminal_error.wait()
-                await _send_websocket_json(
-                    send,
-                    {"T": "error", "code": 403, "msg": "request rejected using private-api-key"},
-                )
-
-
-class _NewsCancellationASGIApp:
-    def __init__(self) -> None:
-        self.disconnected = asyncio.Event()
-        self.subscribed = asyncio.Event()
-
-    async def __call__(self, scope: MutableMapping[str, Any], receive: ASGIReceive, send: ASGISend) -> None:
-        assert scope.get("path") == "/v1beta1/news"
-        await receive()
-        await send({"type": "websocket.accept"})
-        while True:
-            incoming = await receive()
-            if incoming.get("type") == "websocket.disconnect":
-                self.disconnected.set()
-                return
-            text = incoming.get("text")
-            assert isinstance(text, str)
-            request = json.loads(text)
-            if request["action"] == "auth":
-                await _send_websocket_json(send, {"T": "success", "msg": "authenticated"})
-                continue
-            await _send_websocket_json(send, {"T": "subscription", "news": ["*"]})
-            for headline, author in (
-                ("Apple launches a phone", "Benzinga Newsdesk"),
-                ("Microsoft launches a tablet", "Benzinga Newsdesk"),
-                ("unrouted item", "Other Newsdesk"),
-            ):
-                await _send_websocket_json(
-                    send,
-                    {"T": "n", "symbols": ["AAPL"], "author": author, "headline": headline},
-                )
-            self.subscribed.set()
-
-
-class _CancellationDiscordHandler:
-    def __init__(self) -> None:
-        self.first_request_started = asyncio.Event()
-        self.release_request = asyncio.Event()
-        self.sender_cancelled = asyncio.Event()
-        self.requested_titles: list[str] = []
-
-    async def __call__(self, request: httpx2.Request) -> httpx2.Response:
-        title = _payload_title(json.loads(request.content))
-        if title == "AAPL: Apple launches a phone":
-            self.first_request_started.set()
-            try:
-                await self.release_request.wait()
-            except asyncio.CancelledError:
-                self.sender_cancelled.set()
-                raise
-        self.requested_titles.append(title)
-        return httpx2.Response(204)
 
 
 class _RepeatedCancellationNewsStream:
@@ -228,17 +81,6 @@ async def _cancel_tasks_started_after(existing_tasks: set[asyncio.Task[Any]]) ->
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-class _LogMessageEvent(logging.Handler):
-    def __init__(self, message: str, observed: asyncio.Event) -> None:
-        super().__init__()
-        self._message = message
-        self._observed = observed
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if record.getMessage() == self._message:
-            self._observed.set()
-
-
 class _NewsReceiptObserver(logging.Handler):
     """Record received headlines and signal when the delivery queue is blocked."""
 
@@ -262,7 +104,6 @@ def _config() -> Config:
     return Config(
         alpaca_api_key=_DUMMY_ALPACA_API_KEY,
         alpaca_api_secret=_DUMMY_ALPACA_API_SECRET,
-        alpaca_news_stream_url="wss://news.test",
         discord_analyst_webhooks=("https://discord.test/analyst",),
         discord_earnings_webhooks=("https://discord.test/earnings",),
         discord_news_webhooks=("https://discord.test/news",),
@@ -868,151 +709,6 @@ def test_runtime_routes_rating_headlines_to_analyst_payloads(
         records = [json.loads(line) for line in output.getvalue().splitlines()]
         sent = [record for record in records if record["msg"] == "sent Discord webhook"]
         assert [(record["kind"], record["symbol"], record["webhooks"]) for record in sent] == [("analyst", symbol, 1)]
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("shutdown_mode", ["cancel", "stop-event"], ids=["task-cancellation", "external-stop"])
-def test_application_stops_real_news_adapter_and_delivers_payload_on_shutdown(shutdown_mode: str) -> None:
-    """Verify shutdown closes the news adapter and handles queued delivery."""
-
-    async def scenario() -> None:
-        alpaca_app = _ShutdownNewsASGIApp()
-        discord_handler = _ShutdownDiscordHandler(shutdown_mode)
-
-        config = replace(
-            _config(),
-            alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-            discord_news_webhooks=("https://discord.test/api/webhooks/123/private-token",),
-        )
-        stop_event = asyncio.Event()
-        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
-            mounts = {
-                "ws://news.alpaca.test": news_transport,
-                "https://discord.test": httpx2.MockTransport(discord_handler),
-            }
-            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
-                existing_tasks = asyncio.all_tasks()
-                application = asyncio.create_task(run_application(config, client, _logger(StringIO()), stop_event))
-                await asyncio.wait_for(discord_handler.delivered.wait(), timeout=2)
-                await asyncio.wait_for(alpaca_app.connected.wait(), timeout=2)
-                if shutdown_mode == "cancel":
-                    application.cancel()
-                    with pytest.raises(asyncio.CancelledError):
-                        await asyncio.wait_for(application, timeout=2)
-                else:
-                    stop_event.set()
-                    await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
-                    assert not application.done()
-                    assert not discord_handler.delivery_cancelled.is_set()
-                    discord_handler.release_delivery.set()
-                    await asyncio.wait_for(application, timeout=2)
-                await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
-                orphaned_tasks = _tasks_started_after(existing_tasks)
-                try:
-                    assert not orphaned_tasks
-                finally:
-                    await _cancel_tasks_started_after(existing_tasks)
-
-        assert alpaca_app.connected.is_set()
-        assert alpaca_app.disconnected.is_set()
-        assert _payload_title(discord_handler.received_payloads[0]) == "AAPL: Apple &amp; launches a phone"
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize(
-    "terminal_timing",
-    ["late", "before-consumer"],
-    ids=["late", "before-consumer"],
-)
-def test_established_real_news_stream_errors_fail_the_application(terminal_timing: str) -> None:
-    """Verify terminal errors from the established news stream fail the application."""
-
-    async def scenario() -> None:
-        alpaca_app = _EstablishedNewsFailureASGIApp(terminal_timing)
-        logs = StringIO()
-
-        async def unused_discord_handler(_request: httpx2.Request) -> httpx2.Response:
-            unused_discord_message = "terminal stream errors must not send Discord messages"
-            raise AssertionError(unused_discord_message)
-
-        config = replace(
-            _config(),
-            alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-        )
-        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
-            mounts = {
-                "ws://news.alpaca.test": news_transport,
-                "https://discord.test": httpx2.MockTransport(unused_discord_handler),
-            }
-            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
-                application = asyncio.create_task(run_application(config, client, _logger(logs), asyncio.Event()))
-                try:
-                    await asyncio.wait_for(alpaca_app.subscribed.wait(), timeout=2)
-                    if terminal_timing == "late":
-                        alpaca_app.report_terminal_error.set()
-                    with pytest.raises(RuntimeError, match="alpaca news stream terminated") as terminal:
-                        await asyncio.wait_for(application, timeout=2)
-                    assert "private-api-key" not in str(terminal.value)
-                    await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
-                finally:
-                    if not application.done():
-                        application.cancel()
-                    await asyncio.gather(application, return_exceptions=True)
-
-        assert alpaca_app.disconnected.is_set()
-
-    asyncio.run(scenario())
-
-
-def test_real_news_cancellation_stops_adapter_and_cancels_delivery() -> None:
-    """Verify cancellation closes the news adapter and cancels delivery."""
-
-    async def scenario() -> None:
-        alpaca_app = _NewsCancellationASGIApp()
-        discord_handler = _CancellationDiscordHandler()
-        skipped_later_item = asyncio.Event()
-        logs = StringIO()
-        logger = _logger(logs)
-        logger.addHandler(_LogMessageEvent("skipping news item", skipped_later_item))
-
-        config = replace(
-            _config(),
-            alpaca_news_stream_url="ws://news.alpaca.test/v1beta1/news",
-            discord_news_webhooks=("https://discord.test/api/webhooks/news/private-token",),
-        )
-        stop_event = asyncio.Event()
-        async with ASGIWebSocketTransport(alpaca_app) as news_transport:
-            mounts = {
-                "ws://news.alpaca.test": news_transport,
-                "https://discord.test": httpx2.MockTransport(discord_handler),
-            }
-            async with httpx2.AsyncClient(mounts=mounts, timeout=10) as client:
-                existing_tasks = asyncio.all_tasks()
-                application = asyncio.create_task(run_application(config, client, logger, stop_event))
-                try:
-                    await asyncio.wait_for(discord_handler.first_request_started.wait(), timeout=2)
-                    await asyncio.wait_for(skipped_later_item.wait(), timeout=2)
-                    await asyncio.wait_for(alpaca_app.subscribed.wait(), timeout=2)
-                    stop_event.set()
-                    application.cancel()
-                    await asyncio.wait_for(alpaca_app.disconnected.wait(), timeout=2)
-                    discord_handler.release_request.set()
-                    with pytest.raises(asyncio.CancelledError):
-                        await asyncio.wait_for(application, timeout=2)
-                    leaked_tasks = _tasks_started_after(existing_tasks)
-                    assert not leaked_tasks, f"unexpected tasks after cancellation: {leaked_tasks!r}"
-                finally:
-                    discord_handler.release_request.set()
-                    if not application.done():
-                        application.cancel()
-                    await asyncio.gather(application, return_exceptions=True)
-                    await _cancel_tasks_started_after(existing_tasks)
-
-        assert alpaca_app.disconnected.is_set()
-        assert discord_handler.requested_titles == []
-        assert discord_handler.sender_cancelled.is_set()
 
     asyncio.run(scenario())
 
@@ -1683,67 +1379,6 @@ def test_repeated_cancellation_cancels_delivery_worker() -> None:
     asyncio.run(scenario())
 
 
-def test_full_delivery_queue_fails_runtime_without_waiting() -> None:
-    """Verify queue overflow closes the suspended news iterator and cancels delivery."""
-
-    async def scenario() -> None:
-        request_started = asyncio.Event()
-        release_request = asyncio.Event()
-        delivery_cancelled = asyncio.Event()
-        iterator_closed = asyncio.Event()
-        delivered: list[httpx2.Request] = []
-
-        async def handler(request: httpx2.Request) -> httpx2.Response:
-            """Hold the active webhook until runtime cleanup cancels it."""
-            request_started.set()
-            try:
-                await release_request.wait()
-            except asyncio.CancelledError:
-                delivery_cancelled.set()
-                raise
-            delivered.append(request)
-            return httpx2.Response(204)
-
-        async def connect_news() -> AsyncIterable[NewsItem]:
-            """Return enough news to fill the bounded delivery queue."""
-
-            async def events() -> AsyncIterable[NewsItem]:
-                """Yield news until queue overflow closes this generator."""
-                try:
-                    yield NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline="Apple launches a phone")
-                    await request_started.wait()
-                    for _ in range(17):
-                        yield NewsItem(
-                            symbols=("AAPL",),
-                            author="Benzinga Newsdesk",
-                            headline="Apple launches a phone",
-                        )
-                finally:
-                    iterator_closed.set()
-
-            return events()
-
-        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            existing_tasks = asyncio.all_tasks()
-            runtime = asyncio.create_task(run(_config(), client, _logger(StringIO()), connect_news))
-            try:
-                with pytest.raises(RuntimeError, match="Discord delivery queue is full"):
-                    await asyncio.wait_for(runtime, timeout=1)
-                assert iterator_closed.is_set()
-                assert delivery_cancelled.is_set()
-                assert delivered == []
-                pending_tasks = _tasks_started_after(existing_tasks)
-                assert not pending_tasks, f"unexpected tasks after queue overflow: {pending_tasks!r}"
-            finally:
-                release_request.set()
-                if not runtime.done():
-                    runtime.cancel()
-                await asyncio.gather(runtime, return_exceptions=True)
-                await _cancel_tasks_started_after(existing_tasks)
-
-    asyncio.run(scenario())
-
-
 def test_rest_news_burst_applies_bounded_backpressure_and_delivers_once() -> None:  # noqa: PLR0915
     """Verify REST bursts wait for queue space and deliver every article once."""
 
@@ -1792,7 +1427,7 @@ def test_rest_news_burst_applies_bounded_backpressure_and_delivers_once() -> Non
 
             return events()
 
-        config = replace(_config(), alpaca_news_mode="rest")
+        config = _config()
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle_webhook), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(config, client, logger, connect_news))
@@ -1868,7 +1503,7 @@ def test_cancellation_while_rest_delivery_queue_is_blocked_cleans_up() -> None: 
 
             return events()
 
-        config = replace(_config(), alpaca_news_mode="rest")
+        config = _config()
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle_webhook), timeout=10) as client:
             existing_tasks = asyncio.all_tasks()
             runtime = asyncio.create_task(run(config, client, logger, connect_news))
@@ -1894,7 +1529,3 @@ def test_cancellation_while_rest_delivery_queue_is_blocked_cleans_up() -> None: 
                 await _cancel_tasks_started_after(existing_tasks)
 
     asyncio.run(scenario())
-
-
-async def _send_websocket_json(send: ASGISend, payload: object) -> None:
-    await send({"type": "websocket.send", "text": json.dumps(payload)})

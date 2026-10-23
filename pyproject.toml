@@ -9,8 +9,7 @@ description = "Filter Alpaca stock news and send matching items to Discord webho
 requires-python = ">=3.15"
 dependencies = [
     "anyio>=4,<5",
-    "httpcore2==2.13.1",
-    "httpx2[ws]==2.13.1",
+    "httpx2==2.13.1",
     "tzdata>=2024.1",
 ]
 

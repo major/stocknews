@@ -2,14 +2,11 @@
 
 from typing import TYPE_CHECKING
 
-from stocknews.models import AlpacaAuthMode, AlpacaNewsMode, Config
+from stocknews.models import Config
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-_DEFAULT_NEWS_STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
-_DEFAULT_ALPACA_WS_AUTH_MODE: AlpacaAuthMode = "message"
-_DEFAULT_ALPACA_NEWS_MODE: AlpacaNewsMode = "websocket"
 _DEFAULT_ALPACA_NEWS_REST_URL = "https://data.alpaca.markets/v1beta1/news"
 _DEFAULT_NEWS_POLL_INTERVAL_SECONDS = 300
 _DEFAULT_NEWS_POLL_OVERLAP_SECONDS = 600
@@ -44,9 +41,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
     return Config(
         alpaca_api_key=api_key,
         alpaca_api_secret=api_secret,
-        alpaca_news_stream_url=environ.get("ALPACA_NEWS_STREAM_URL", _DEFAULT_NEWS_STREAM_URL),
-        alpaca_ws_auth_mode=_alpaca_auth_mode(environ),
-        alpaca_news_mode=_alpaca_news_mode(environ),
         alpaca_news_rest_url=_nonblank_env(
             environ,
             "ALPACA_NEWS_REST_URL",
@@ -64,18 +58,6 @@ def load_config(environ: Mapping[str, str]) -> Config:
         stock_logo=environ.get("STOCK_LOGO", _DEFAULT_STOCK_LOGO),
         transparent_png=environ.get("TRANSPARENT_PNG", _DEFAULT_TRANSPARENT_PNG),
     )
-
-
-def _alpaca_news_mode(environ: Mapping[str, str]) -> AlpacaNewsMode:
-    """Parse the Alpaca news transport mode setting."""
-    value = environ.get("ALPACA_NEWS_MODE", _DEFAULT_ALPACA_NEWS_MODE)
-    normalized = value.strip().casefold()
-    if normalized == "websocket":
-        return "websocket"
-    if normalized == "rest":
-        return "rest"
-    error_message = "ALPACA_NEWS_MODE must be 'websocket' or 'rest'"
-    raise ValueError(error_message)
 
 
 def _nonblank_env(environ: Mapping[str, str], key: str, default: str) -> str:
@@ -102,18 +84,6 @@ def _positive_int_env(environ: Mapping[str, str], key: str, default: int) -> int
         error_message = f"{key} must be a positive integer"
         raise ValueError(error_message)
     return parsed
-
-
-def _alpaca_auth_mode(environ: Mapping[str, str]) -> AlpacaAuthMode:
-    """Parse the Alpaca WebSocket authentication mode setting."""
-    value = environ.get("ALPACA_WS_AUTH_MODE", _DEFAULT_ALPACA_WS_AUTH_MODE)
-    normalized = value.strip().casefold()
-    if normalized == "message":
-        return "message"
-    if normalized == "headers":
-        return "headers"
-    error_message = "ALPACA_WS_AUTH_MODE must be 'message' or 'headers'"
-    raise ValueError(error_message)
 
 
 def _required_env(environ: Mapping[str, str], key: str) -> str:

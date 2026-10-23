@@ -31,7 +31,6 @@ def _config(path: Path, **changes: Any) -> Config:
     values: dict[str, Any] = {
         "alpaca_api_key": "test-api-key",
         "alpaca_api_secret": "test-api-secret",
-        "alpaca_news_stream_url": "wss://news.test",
         "alpaca_news_rest_url": "https://news.test/v1/news",
         "news_poll_interval_seconds": 17,
         "news_poll_overlap_seconds": 60,
