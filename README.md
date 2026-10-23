@@ -14,6 +14,7 @@ service.
 | `ALPACA_API_KEY` | Yes | None | Alpaca API key |
 | `ALPACA_API_SECRET` | Yes | None | Alpaca API secret |
 | `ALPACA_NEWS_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v1beta1/news` | Alpaca news WebSocket URL |
+| `ALPACA_WS_AUTH_MODE` | No | `message` | Alpaca WebSocket authentication mode: `message` or `headers` |
 | `DISCORD_ANALYST_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for analyst ratings |
 | `DISCORD_ANALYST_ENABLED` | No | `true` | Enable analyst rating and price-target alerts |
 | `DISCORD_EARNINGS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for earnings |
@@ -26,6 +27,11 @@ service.
 Set configuration in the environment or in `.env` when using Compose. The two
 Alpaca credentials are required. Webhook lists are comma-separated; empty entries
 are ignored.
+
+`ALPACA_WS_AUTH_MODE=message` is the default and preserves the current behavior
+of authenticating with an Alpaca stream message. Set it to `headers` to send
+credentials in the WebSocket connection headers instead. Configuration changes
+take effect after restarting the service.
 
 The three `DISCORD_*_ENABLED` settings accept `true`/`false`, `1`/`0`,
 `yes`/`no`, or `on`/`off`, case-insensitive and with surrounding whitespace

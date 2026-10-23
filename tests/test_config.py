@@ -18,6 +18,7 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     )
 
     assert settings.alpaca_news_stream_url == "wss://stream.data.alpaca.markets/v1beta1/news"
+    assert settings.alpaca_ws_auth_mode == "message"
     assert settings.stock_logo == "https://static.stocktitan.net/company-logo/%s.webp"
     assert settings.transparent_png == "https://major.io/transparent.png"
     assert settings.discord_analyst_webhooks == ("a", "b")
@@ -26,6 +27,33 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     assert settings.discord_analyst_enabled is True
     assert settings.discord_earnings_enabled is True
     assert settings.discord_news_enabled is True
+
+
+@pytest.mark.parametrize("value", ["message", "headers", " HEADERS "])
+def test_config_parses_alpaca_ws_auth_mode(value: str) -> None:
+    """Parse supported Alpaca WebSocket authentication modes."""
+    settings = load_config(
+        {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_API_SECRET": "secret",
+            "ALPACA_WS_AUTH_MODE": value,
+        }
+    )
+
+    assert settings.alpaca_ws_auth_mode == value.strip().casefold()
+
+
+@pytest.mark.parametrize("value", ["", "  ", "invalid"])
+def test_config_rejects_invalid_alpaca_ws_auth_mode(value: str) -> None:
+    """Reject empty or unsupported Alpaca WebSocket authentication modes."""
+    with pytest.raises(ValueError, match="ALPACA_WS_AUTH_MODE"):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                "ALPACA_WS_AUTH_MODE": value,
+            }
+        )
 
 
 @pytest.mark.parametrize(

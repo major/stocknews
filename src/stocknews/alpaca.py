@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from httpx2.websockets import AsyncWebSocketSession
 
-    from .models import AlpacaSettings
+    from .models import AlpacaAuthMode, AlpacaSettings
 
 __all__ = [
     "AlpacaStreamError",
@@ -53,6 +53,7 @@ class _StreamConfig[EventT]:
     channel: str
     symbols: tuple[str, ...]
     parse_event: Callable[[dict[str, object]], EventT | None]
+    auth_mode: AlpacaAuthMode = "message"
 
 
 class AlpacaStreamError(RuntimeError):
@@ -107,6 +108,7 @@ async def start_news_stream(
             "news",
             ("*",),
             _parse_news,
+            settings.auth_mode,
         ),
         stop_event,
         on_terminated=on_terminated,
@@ -286,11 +288,18 @@ async def _read_connection[EventT](
     attempt: int,
 ) -> _Stopped | _TransportFailure | _TerminalFailure:
     try:
+        headers = None
+        if config.auth_mode == "headers":
+            headers = {
+                "APCA-API-KEY-ID": config.api_key,
+                "APCA-API-SECRET-KEY": config.api_secret,
+            }
         async with config.client.websocket(
             config.url,
             max_message_size_bytes=MAX_MESSAGE_SIZE_BYTES,
             keepalive_ping_interval_seconds=KEEPALIVE_PING_INTERVAL_SECONDS,
             keepalive_ping_timeout_seconds=KEEPALIVE_PING_TIMEOUT_SECONDS,
+            headers=headers,
         ) as websocket:
             logger.info(
                 "connected to Alpaca stream",
@@ -321,10 +330,15 @@ async def _authenticate_and_subscribe[EventT](
     stop_event: asyncio.Event,
     attempt: int,
 ) -> list[dict[str, object]]:
-    await websocket.send_json({"action": "auth", "key": config.api_key, "secret": config.api_secret})
-    pending_messages = await _wait_for_ack(config, websocket, stop_event, "authentication")
-    if pending_messages is None:
-        return []
+    pending_messages: list[dict[str, object]] = []
+    if config.auth_mode == "message":
+        await websocket.send_json({"action": "auth", "key": config.api_key, "secret": config.api_secret})
+        auth_messages = await _wait_for_ack(config, websocket, stop_event, "authentication")
+        if auth_messages is None:
+            return []
+        pending_messages.extend(auth_messages)
+    elif stop_event.is_set():
+        return pending_messages
     logger.info(
         "authenticated Alpaca stream",
         extra={"stream": config.stream_name, "attempt": attempt},

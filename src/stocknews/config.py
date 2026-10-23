@@ -2,12 +2,13 @@
 
 from typing import TYPE_CHECKING
 
-from stocknews.models import Config
+from stocknews.models import AlpacaAuthMode, Config
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 _DEFAULT_NEWS_STREAM_URL = "wss://stream.data.alpaca.markets/v1beta1/news"
+_DEFAULT_ALPACA_WS_AUTH_MODE: AlpacaAuthMode = "message"
 _DEFAULT_STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _DEFAULT_TRANSPARENT_PNG = "https://major.io/transparent.png"
 
@@ -25,6 +26,7 @@ def load_config(environ: Mapping[str, str]) -> Config:
         alpaca_api_key=api_key,
         alpaca_api_secret=api_secret,
         alpaca_news_stream_url=environ.get("ALPACA_NEWS_STREAM_URL", _DEFAULT_NEWS_STREAM_URL),
+        alpaca_ws_auth_mode=_alpaca_auth_mode(environ),
         discord_analyst_webhooks=csv_values(environ.get("DISCORD_ANALYST_WEBHOOKS", "")),
         discord_earnings_webhooks=csv_values(environ.get("DISCORD_EARNINGS_WEBHOOKS", "")),
         discord_news_webhooks=csv_values(environ.get("DISCORD_NEWS_WEBHOOKS", "")),
@@ -34,6 +36,18 @@ def load_config(environ: Mapping[str, str]) -> Config:
         stock_logo=environ.get("STOCK_LOGO", _DEFAULT_STOCK_LOGO),
         transparent_png=environ.get("TRANSPARENT_PNG", _DEFAULT_TRANSPARENT_PNG),
     )
+
+
+def _alpaca_auth_mode(environ: Mapping[str, str]) -> AlpacaAuthMode:
+    """Parse the Alpaca WebSocket authentication mode setting."""
+    value = environ.get("ALPACA_WS_AUTH_MODE", _DEFAULT_ALPACA_WS_AUTH_MODE)
+    normalized = value.strip().casefold()
+    if normalized == "message":
+        return "message"
+    if normalized == "headers":
+        return "headers"
+    error_message = "ALPACA_WS_AUTH_MODE must be 'message' or 'headers'"
+    raise ValueError(error_message)
 
 
 def _required_env(environ: Mapping[str, str], key: str) -> str:

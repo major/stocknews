@@ -22,10 +22,12 @@ Read only what you need:
 ## Conventions
 
 - `ALPACA_API_KEY` and `ALPACA_API_SECRET` are required. Optional settings are
-  `ALPACA_NEWS_STREAM_URL`, `DISCORD_ANALYST_ENABLED`,
+  `ALPACA_NEWS_STREAM_URL`, `ALPACA_WS_AUTH_MODE`, `DISCORD_ANALYST_ENABLED`,
   `DISCORD_ANALYST_WEBHOOKS`, `DISCORD_EARNINGS_ENABLED`,
   `DISCORD_EARNINGS_WEBHOOKS`, `DISCORD_NEWS_ENABLED`,
   `DISCORD_NEWS_WEBHOOKS`, `STOCK_LOGO`, and `TRANSPARENT_PNG`.
+  `ALPACA_WS_AUTH_MODE` defaults to `message` and accepts `message` or
+  `headers`.
   The three category-enabled settings default to true and
   accept true/false, 1/0, yes/no, and on/off, case-insensitive with surrounding
   whitespace ignored. An explicitly empty or invalid value raises `ValueError`

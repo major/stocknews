@@ -624,6 +624,41 @@ def test_news_handshake_stops_without_reading_the_next_ack(stopped_stage: str) -
     asyncio.run(scenario())
 
 
+def test_header_handshake_stops_before_sending_subscription() -> None:
+    """Skip subscription when shutdown is requested before header authentication."""
+
+    async def scenario() -> None:
+        """Run the header handshake helper with shutdown already requested."""
+        stop_event = asyncio.Event()
+        stop_event.set()
+        websocket = _StopOnActionWebSocket(stop_event, "subscribe")
+        async with httpx2.AsyncClient() as client:
+            config = alpaca._StreamConfig(  # noqa: SLF001
+                client=client,
+                url="ws://alpaca.test/v1beta1/news",
+                api_key=NEWS_TEST_API_KEY,
+                api_secret=NEWS_TEST_API_CREDENTIAL,
+                stream_name="news",
+                channel="news",
+                symbols=("*",),
+                parse_event=alpaca._parse_news,  # noqa: SLF001
+                auth_mode="headers",
+            )
+            pending_messages = await alpaca._authenticate_and_subscribe(  # noqa: SLF001
+                config,
+                cast("httpx2.websockets.AsyncWebSocketSession", websocket),
+                stop_event,
+                attempt=1,
+            )
+
+        assert stop_event.is_set()
+        assert websocket.requests == []
+        assert websocket.receive_count == 0
+        assert pending_messages == []
+
+    asyncio.run(scenario())
+
+
 def test_already_set_stop_event_does_not_open_connection_or_leak_tasks() -> None:
     """Skip connection setup and avoid task leaks when shutdown is already requested."""
 
@@ -1074,6 +1109,69 @@ def test_loopback_large_news_batch_keeps_event_after_subscription_ack() -> None:
 
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
+def test_loopback_header_auth_sends_credentials_in_handshake_and_skips_auth_message() -> None:
+    """Send Alpaca credentials in the WebSocket handshake and subscribe directly."""
+
+    async def scenario() -> None:
+        """Run header authentication against a local WebSocket server."""
+        handshake_headers: dict[bytes, bytes] = {}
+        requests: list[dict[str, object]] = []
+
+        async def handler(
+            _: int,
+            path: str,
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+            headers: list[tuple[bytes, bytes]],
+        ) -> None:
+            """Send unsolicited status messages and acknowledge the subscription."""
+            handshake_headers.update(headers)
+            websocket = await _accept_websocket(path, headers, writer)
+            await _send_ws_json(writer, websocket, {"T": "success", "msg": "connected"})
+            await _send_ws_json(writer, websocket, {"T": "success", "msg": "authenticated"})
+            request = await _next_client_message(reader, writer, websocket)
+            assert request is not None
+            requests.append(request)
+            await _send_ws_json(
+                writer,
+                websocket,
+                [
+                    {"T": "subscription", "news": ["*"]},
+                    {"T": "n", "symbols": ["AAPL"], "author": "Desk", "headline": "Large", "summary": "A summary"},
+                ],
+            )
+
+        async with _LoopbackServer(handler) as server:
+            stop_event = asyncio.Event()
+            async with httpx2.AsyncClient() as client:
+                stream = await alpaca.start_news_stream(
+                    client,
+                    settings=AlpacaSettings(
+                        api_key=NEWS_TEST_API_KEY,
+                        api_secret=NEWS_TEST_API_CREDENTIAL,
+                        news_stream_url=f"{server.url}/v1beta1/news",
+                        auth_mode="headers",
+                    ),
+                    stop_event=stop_event,
+                )
+                item = await asyncio.wait_for(stream.events.get(), timeout=2)
+                assert item == NewsItem(
+                    symbols=("AAPL",),
+                    author="Desk",
+                    headline="Large",
+                    summary="A summary",
+                )
+                assert requests == [{"action": "subscribe", "news": ["*"]}]
+                stop_event.set()
+                await asyncio.wait_for(stream.task, timeout=2)
+
+        assert handshake_headers[b"apca-api-key-id"] == NEWS_TEST_API_KEY.encode()
+        assert handshake_headers[b"apca-api-secret-key"] == NEWS_TEST_API_CREDENTIAL.encode()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 @pytest.mark.parametrize(
     "acknowledged",
     [[], "*", ["*", 17]],
@@ -1200,36 +1298,48 @@ def test_loopback_established_503_retries_and_401_terminates(monkeypatch: pytest
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 @pytest.mark.parametrize("status_code", [401, 503])
-def test_loopback_initial_upgrade_failure_remains_a_startup_failure(status_code: int) -> None:
+@pytest.mark.parametrize("auth_mode", ["message", "headers"], ids=["message-auth", "header-auth"])
+def test_loopback_initial_upgrade_failure_remains_a_startup_failure(status_code: int, auth_mode: str) -> None:
     """Treat an initial WebSocket upgrade rejection as a startup error.
 
     Args:
         status_code: HTTP status returned for the rejected upgrade.
+        auth_mode: Authentication method used for the WebSocket connection.
     """
 
     async def scenario() -> None:
+        request_headers: list[dict[bytes, bytes]] = []
+
         async def handler(
             _: int,
             __: str,
             ___: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
-            ____: list[tuple[bytes, bytes]],
+            headers: list[tuple[bytes, bytes]],
         ) -> None:
+            request_headers.append(dict(headers))
             await _reject_upgrade(writer, status_code)
 
         async with _LoopbackServer(handler) as server:
             async with httpx2.AsyncClient() as client:
-                with pytest.raises(alpaca.AlpacaStreamError, match=f"HTTP {status_code}"):
+                with pytest.raises(alpaca.AlpacaStreamError, match=f"HTTP {status_code}") as error:
                     await alpaca.start_news_stream(
                         client,
                         settings=AlpacaSettings(
-                            api_key=TEST_API_KEY,
-                            api_secret=TEST_API_CREDENTIAL,
+                            api_key=REDACTION_TEST_API_KEY,
+                            api_secret=REDACTION_TEST_API_CREDENTIAL,
                             news_stream_url=f"{server.url}/news",
+                            auth_mode=auth_mode,
                         ),
                         stop_event=asyncio.Event(),
                     )
             assert server.connection_count == 1
+            assert len(request_headers) == 1
+            if auth_mode == "headers":
+                assert request_headers[0][b"apca-api-key-id"] == REDACTION_TEST_API_KEY.encode()
+                assert request_headers[0][b"apca-api-secret-key"] == REDACTION_TEST_API_CREDENTIAL.encode()
+            assert REDACTION_TEST_API_KEY not in str(error.value)
+            assert REDACTION_TEST_API_CREDENTIAL not in str(error.value)
 
     asyncio.run(scenario())
 
@@ -1279,8 +1389,11 @@ def test_loopback_acknowledgement_timeout_covers_the_entire_stage(monkeypatch: p
 
 
 @pytest.mark.allow_hosts(["127.0.0.1", "::1"])
-def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reconnect after keepalive failure, reauthenticate, and resubscribe."""
+@pytest.mark.parametrize("auth_mode", ["message", "headers"], ids=["message-auth", "header-auth"])
+def test_loopback_keepalive_disconnect_reconnects_and_resubscribes(
+    monkeypatch: pytest.MonkeyPatch, auth_mode: str
+) -> None:
+    """Reconnect after keepalive failure and resubscribe with either auth mode."""
 
     async def scenario() -> None:
         monkeypatch.setattr(alpaca, "KEEPALIVE_PING_INTERVAL_SECONDS", 0.01)
@@ -1288,6 +1401,7 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
         monkeypatch.setattr(alpaca, "RECONNECT_DELAY_SECONDS", 0)
         ping_seen = asyncio.Event()
         requests: list[dict[str, object]] = []
+        connection_headers: list[dict[bytes, bytes]] = []
         recovered_connection_number = 2
 
         async def handler(
@@ -1297,6 +1411,7 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
             writer: asyncio.StreamWriter,
             headers: list[tuple[bytes, bytes]],
         ) -> None:
+            connection_headers.append(dict(headers))
             websocket = await _accept_websocket(path, headers, writer)
             subscribed = False
             while events := await _next_ws_events(reader, websocket):
@@ -1337,13 +1452,30 @@ def test_loopback_keepalive_disconnect_reauthenticates_and_resubscribes(monkeypa
                         api_key=TEST_API_KEY,
                         api_secret=TEST_API_CREDENTIAL,
                         news_stream_url=f"{server.url}/v1beta1/news",
+                        auth_mode=auth_mode,
                     ),
                     stop_event=stop_event,
                 )
                 await asyncio.wait_for(ping_seen.wait(), timeout=2)
                 item = await asyncio.wait_for(stream.events.get(), timeout=2)
                 assert item.symbols == ("QQQ",)
-                assert [request["action"] for request in requests] == ["auth", "subscribe", "auth", "subscribe"]
+                expected_actions = {
+                    "message": ["auth", "subscribe", "auth", "subscribe"],
+                    "headers": ["subscribe", "subscribe"],
+                }[auth_mode]
+                assert [request["action"] for request in requests] == expected_actions
+                assert len(connection_headers) == recovered_connection_number
+                expected_credentials = {
+                    "message": {},
+                    "headers": {
+                        b"apca-api-key-id": TEST_API_KEY.encode(),
+                        b"apca-api-secret-key": TEST_API_CREDENTIAL.encode(),
+                    },
+                }[auth_mode]
+                assert all(
+                    all(headers.get(name) == value for name, value in expected_credentials.items())
+                    for headers in connection_headers
+                )
                 stop_event.set()
                 await asyncio.wait_for(stream.task, timeout=2)
 

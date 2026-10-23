@@ -1,6 +1,9 @@
 """Immutable values shared by the stock news application."""
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+AlpacaAuthMode = Literal["message", "headers"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -24,11 +27,13 @@ class AlpacaSettings:
         api_key: Alpaca API key, excluded from the generated representation.
         api_secret: Alpaca API secret, excluded from the generated representation.
         news_stream_url: WebSocket URL for the news stream.
+        auth_mode: Authentication method for the WebSocket connection.
     """
 
     api_key: str = field(repr=False)
     api_secret: str = field(repr=False)
     news_stream_url: str
+    auth_mode: AlpacaAuthMode = "message"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -46,3 +51,4 @@ class Config:
     discord_analyst_enabled: bool = True
     discord_earnings_enabled: bool = True
     discord_news_enabled: bool = True
+    alpaca_ws_auth_mode: AlpacaAuthMode = "message"
