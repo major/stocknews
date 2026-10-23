@@ -12,6 +12,7 @@ from stocknews.earnings import company_name, describe_earnings
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from stocknews.analyst import AnalystReport
     from stocknews.models import NewsItem
 
 _RAISES_COLOR = 0x4CAF50
@@ -19,6 +20,7 @@ _LOWERS_COLOR = 0xD42020
 _HTTP_SUCCESS_STATUS_MIN = 200
 _HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE = 300
 _WEBHOOK_DEADLINE_SECONDS = 10.0
+_AUTHOR_NAME_LIMIT = 256
 
 
 class EmbedImage(TypedDict):
@@ -94,23 +96,53 @@ def analyst_payload(
     else:
         emoji, color = "❓", 0
 
-    ticker_prefix = f"{symbol}: " if symbol else ""
-    if report.price_target > 0:
-        details = f"{report.stock} ${report.price_target:.2f}"
-    elif is_rating_change and report.guidance:
-        display_action = "Upgraded" if rating_action == "upgrades" else "Downgraded"
-        details = f"{report.stock} {display_action} to {report.guidance}".strip()
+    if report.firm:
+        author_name = _analyst_author_name(report, symbol, emoji)
+    elif symbol:
+        parts = [f"{emoji} {symbol}", headline]
+        author_name = " · ".join(part for part in parts if part)
     else:
-        details = " ".join(part for part in (report.stock, report.guidance) if part)
-    title = f"{emoji} {ticker_prefix}{details}".rstrip()
-    author: EmbedAuthor = {"name": title}
+        author_name = f"{emoji} {headline}".rstrip()
+
+    author_name, was_truncated = _limit_author_name(author_name)
+    author: EmbedAuthor = {"name": author_name}
     if symbol:
         author["icon_url"] = stock_logo.replace("%s", symbol.lower())
     embed: Embed = {"author": author}
-    if headline:
+    if was_truncated and headline:
         embed["description"] = headline
     embed["color"] = color
     return {"embeds": [embed]}
+
+
+def _analyst_author_name(report: AnalystReport, symbol: str, emoji: str) -> str:
+    """Format a parsed analyst report as one compact author line."""
+    subject = symbol or report.stock
+    parts = [f"{emoji} {subject}".strip(), report.firm]
+    rating_action = report.action.casefold()
+    if report.guidance:
+        if rating_action == "upgrades":
+            guidance = f"Upgraded to {report.guidance}"
+        elif rating_action == "downgrades":
+            guidance = f"Downgraded to {report.guidance}"
+        else:
+            guidance = report.guidance
+        parts.append(guidance)
+    if report.price_target > 0:
+        target = f"Target ${report.price_target:g}"
+        if report.price_target_action == "Raises":
+            target = f"Target ↑ ${report.price_target:g}"
+        elif report.price_target_action == "Lowers":
+            target = f"Target ↓ ${report.price_target:g}"
+        parts.append(target)
+    return " · ".join(part for part in parts if part)
+
+
+def _limit_author_name(name: str) -> tuple[str, bool]:
+    """Keep an embed author within Discord's 256-character name limit."""
+    if len(name) <= _AUTHOR_NAME_LIMIT:
+        return name, False
+    return f"{name[: _AUTHOR_NAME_LIMIT - 1]}…", True
 
 
 def news_payload(

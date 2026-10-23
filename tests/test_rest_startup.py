@@ -184,7 +184,7 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(
     assert all(request.headers["APCA-API-SECRET-KEY"] == _API_SECRET for request in requests)
     assert [path for path, _title in deliveries] == ["/earnings", "/analyst", "/news", "/news", "/news"]
     assert deliveries[0][1] == "AAPL: Apple"
-    assert deliveries[1][1] == "💚 AAPL: Apple $223.00"
+    assert deliveries[1][1] == "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223"
     assert deliveries[2][1:] == ("AAPL: Apple launches a phone",)
     assert deliveries[3][1:] == ("MSFT: Microsoft launches a tablet",)
     assert deliveries[4][1:] == ("AAPL: Apple says this would be worth reading",)
