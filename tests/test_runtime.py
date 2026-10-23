@@ -369,35 +369,40 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
     asyncio.run(scenario())
 
 
-def test_analyst_asset_name_lookup_uses_auth_configured_url_and_cache() -> None:
-    """Verify analyst lookups use Alpaca credentials, the configured URL, and cached names."""
+def test_asset_name_lookup_is_shared_by_analyst_and_earnings_deliveries() -> None:
+    """Verify analyst and earnings share one authenticated cached asset lookup."""
 
     async def scenario() -> None:
-        """Send two analyst items for one ticker and inspect shared-client requests."""
+        """Send both delivery types for one ticker and inspect their payloads."""
         asset_requests: list[httpx2.Request] = []
-        webhook_payloads: list[dict[str, object]] = []
-        expected_report_count = 2
-        item = NewsItem(
+        webhook_payloads: list[tuple[str, dict[str, object]]] = []
+        expected_delivery_count = 2
+        analyst_item = NewsItem(
             symbols=("AAPL",),
             author="Benzinga Newsdesk",
             headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
         )
+        earnings_item = NewsItem(
+            symbols=("AAPL",),
+            author="Benzinga Newsdesk",
+            headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+        )
 
         async def handler(request: httpx2.Request) -> httpx2.Response:
-            """Return an asset name or record the webhook payload."""
+            """Return an asset name or record the webhook path and payload."""
             if request.method == "GET":
                 asset_requests.append(request)
                 return httpx2.Response(200, json={"name": "Apple Inc."})
-            webhook_payloads.append(json.loads(request.content))
+            webhook_payloads.append((request.url.path, json.loads(request.content)))
             return httpx2.Response(204)
 
         async def connect_news() -> AsyncIterable[NewsItem]:
-            """Return two analyst reports for the same ticker."""
+            """Return analyst and earnings items for the same ticker."""
 
             async def events() -> AsyncIterable[NewsItem]:
-                """Yield both reports in order."""
-                yield item
-                yield item
+                """Yield both category items in order."""
+                yield analyst_item
+                yield earnings_item
 
             return events()
 
@@ -411,13 +416,22 @@ def test_analyst_asset_name_lookup_uses_auth_configured_url_and_cache() -> None:
         assert str(asset_request.url) == "https://assets.example.test/v2/assets/AAPL"
         assert asset_request.headers["APCA-API-KEY-ID"] == _DUMMY_ALPACA_API_KEY
         assert asset_request.headers["APCA-API-SECRET-KEY"] == _DUMMY_ALPACA_API_SECRET
-        assert len(webhook_payloads) == expected_report_count
-        assert all(payload["username"] == "Analyst Wire" for payload in webhook_payloads)
-        assert all(payload["embeds"][0]["title"] == "AAPL · Apple Inc." for payload in webhook_payloads)
-        assert all(
-            payload["embeds"][0]["description"] == "Target raised to $223 · Buy maintained · Goldman Sachs"
-            for payload in webhook_payloads
-        )
+        assert len(webhook_payloads) == expected_delivery_count
+        assert [path for path, _ in webhook_payloads] == ["/analyst", "/earnings"]
+        analyst_payload = webhook_payloads[0][1]
+        assert analyst_payload["username"] == "Analyst Wire"
+        analyst_embed = analyst_payload["embeds"][0]
+        assert analyst_embed["title"] == "AAPL · Apple Inc."
+        assert analyst_embed["description"] == "Target raised to $223 · Buy maintained · Goldman Sachs"
+
+        earnings_payload = webhook_payloads[1][1]
+        earnings_embed = earnings_payload["embeds"][0]
+        assert earnings_embed == {
+            "title": "AAPL: Apple Inc.",
+            "description": "💚 EPS: $2.00 vs. $1.80 est.",
+            "image": {"url": _TRANSPARENT_PNG},
+            "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
+        }
 
     asyncio.run(scenario())
 
@@ -460,6 +474,58 @@ def test_analyst_asset_lookup_failure_does_not_block_webhook_delivery() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failure", ["missing-name", "server-error"])
+def test_earnings_asset_lookup_failure_preserves_headline_name_and_delivery(failure: str) -> None:
+    """Verify missing or failed lookups keep the earnings headline company name."""
+
+    async def scenario() -> None:
+        """Return the selected asset lookup failure and inspect the earnings webhook."""
+        requested: list[tuple[str, str]] = []
+        webhook_payloads: list[dict[str, object]] = []
+
+        async def handler(request: httpx2.Request) -> httpx2.Response:
+            """Return the selected asset response and accept the earnings webhook."""
+            requested.append((request.method, request.url.path))
+            if request.method == "GET":
+                if failure == "server-error":
+                    return httpx2.Response(503)
+                return httpx2.Response(200, json={})
+            webhook_payloads.append(json.loads(request.content))
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a valid earnings headline with a symbol."""
+
+            async def events() -> AsyncIterable[NewsItem]:
+                """Yield one earnings item."""
+                yield NewsItem(
+                    symbols=("AAPL",),
+                    author="Benzinga Newsdesk",
+                    headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+                )
+
+            return events()
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
+            await run(_config(), client, _logger(StringIO()), connect_news)
+
+        assert requested == [("GET", "/v2/assets/AAPL"), ("POST", "/earnings")]
+        assert webhook_payloads == [
+            {
+                "embeds": [
+                    {
+                        "title": "AAPL: Apple",
+                        "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                        "image": {"url": _TRANSPARENT_PNG},
+                        "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
+                    }
+                ]
+            }
+        ]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("case", "expected_posts"),
     [
@@ -469,10 +535,15 @@ def test_analyst_asset_lookup_failure_does_not_block_webhook_delivery() -> None:
         ("other-category", 1),
         ("no-symbol", 1),
         ("no-webhooks", 0),
+        ("earnings-filtered", 0),
+        ("earnings-disabled", 0),
+        ("earnings-no-symbol", 1),
+        ("earnings-no-webhooks", 0),
+        ("earnings-unparseable", 1),
     ],
 )
-def test_runtime_skips_asset_lookup_when_analyst_delivery_is_not_eligible(case: str, expected_posts: int) -> None:
-    """Verify only eligible analyst deliveries request an Alpaca asset name."""
+def test_runtime_skips_asset_lookup_when_delivery_is_not_eligible(case: str, expected_posts: int) -> None:
+    """Verify only eligible analyst and earnings deliveries request an asset name."""
 
     async def scenario() -> None:
         """Run the selected item case and count asset GETs and webhook POSTs."""
@@ -482,6 +553,11 @@ def test_runtime_skips_asset_lookup_when_analyst_delivery_is_not_eligible(case: 
             author="Benzinga Newsdesk",
             headline="Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
         )
+        earnings = NewsItem(
+            symbols=("AAPL",),
+            author="Benzinga Newsdesk",
+            headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+        )
         items = {
             "suppressed": NewsItem(
                 symbols=("AAPL",),
@@ -490,15 +566,24 @@ def test_runtime_skips_asset_lookup_when_analyst_delivery_is_not_eligible(case: 
             ),
             "filtered": replace(analyst, author="Someone Else"),
             "disabled": analyst,
-            "other-category": replace(analyst, headline="Apple Q1 EPS $2.00 beat $1.80 Estimate"),
+            "other-category": replace(analyst, headline="Apple launches a phone"),
             "no-symbol": replace(analyst, symbols=()),
             "no-webhooks": analyst,
+            "earnings-filtered": replace(earnings, author="Someone Else"),
+            "earnings-disabled": earnings,
+            "earnings-no-symbol": replace(earnings, symbols=()),
+            "earnings-no-webhooks": earnings,
+            "earnings-unparseable": replace(earnings, headline="Apple reports quarterly results"),
         }
         config = _config()
         if case == "disabled":
             config = replace(config, discord_analyst_enabled=False)
         elif case == "no-webhooks":
             config = replace(config, discord_analyst_webhooks=())
+        elif case == "earnings-disabled":
+            config = replace(config, discord_earnings_enabled=False)
+        elif case == "earnings-no-webhooks":
+            config = replace(config, discord_earnings_webhooks=())
 
         async def handler(request: httpx2.Request) -> httpx2.Response:
             """Record request methods and return successful API responses."""

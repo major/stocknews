@@ -219,14 +219,15 @@ async def _process_news_read(
     delivery = _make_delivery(message, config, logger)
     if (
         delivery is not None
-        and delivery.kind == "analyst"
+        and delivery.kind in {"analyst", "earnings"}
         and delivery.symbol
         and delivery.webhooks
         and state.asset_names is not None
     ):
         company_name = await state.asset_names.get(delivery.symbol)
         if company_name:
-            named_payload = analyst_payload(
+            payload_builder = earnings_payload if delivery.kind == "earnings" else analyst_payload
+            named_payload = payload_builder(
                 delivery.symbol,
                 unescape(message.headline),
                 config.stock_logo,

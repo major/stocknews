@@ -57,6 +57,57 @@ def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
     assert earnings_payload("AAPL", "Apple launches a product", STOCK_LOGO, TRANSPARENT_PNG) is None
 
 
+@pytest.mark.parametrize(
+    ("company_name", "expected_title"),
+    [
+        ("  Apple Inc.  ", "AAPL: Apple Inc."),
+        (None, "AAPL: Apple"),
+        ("", "AAPL: Apple"),
+        (" \t ", "AAPL: Apple"),
+    ],
+)
+def test_earnings_payload_prefers_nonblank_company_name_override(
+    company_name: str | None,
+    expected_title: str,
+) -> None:
+    """Use a stripped company override while preserving the earnings embed."""
+    payload = earnings_payload(
+        "AAPL",
+        "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+        STOCK_LOGO,
+        TRANSPARENT_PNG,
+        company_name,
+    )
+
+    assert payload == {
+        "embeds": [
+            {
+                "title": expected_title,
+                "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                "image": {"url": TRANSPARENT_PNG},
+                "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize("company_name", [None, "Apple Inc."])
+def test_earnings_payload_suppresses_headline_without_earnings_data(
+    company_name: str | None,
+) -> None:
+    """Keep company-name overrides from creating an earnings embed by themselves."""
+    assert (
+        earnings_payload(
+            "AAPL",
+            "Apple launches a product",
+            STOCK_LOGO,
+            TRANSPARENT_PNG,
+            company_name,
+        )
+        is None
+    )
+
+
 def test_earnings_payload_uses_company_name_without_symbol() -> None:
     """Build an earnings embed without a ticker prefix when no symbol is retained."""
     payload = earnings_payload(
