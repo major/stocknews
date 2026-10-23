@@ -11,7 +11,7 @@ import sys
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx2
 import pytest
@@ -42,6 +42,11 @@ DUMMY_REPR_CREDENTIALS = ("repr-test-key", "repr-test-secret")
 DUMMY_REPR_API_KEY, DUMMY_REPR_API_SECRET = DUMMY_REPR_CREDENTIALS
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STARTUP_TEST_LOGGER_NAMES = ("startup-terminal-test",)
+EXPECTED_STOCKNEWS_BANNER = r"""     _             _
+ ___| |_ ___   ___| | ___ __   _____      _____
+/ __| __/ _ \ / __| |/ / '_ \ / _ \ \ /\ / / __|
+\__ \ || (_) | (__|   <| | | |  __/\ V  V /\__ \
+|___/\__\___/ \___|_|\_\_| |_|\___| \_/\_/ |___/"""
 
 
 @pytest.fixture(autouse=True)
@@ -471,6 +476,15 @@ def test_startup_logs_commit_before_missing_configuration(
     build_date: str | None,
 ) -> None:
     """Verify startup logs the commit before reporting missing configuration."""
+    run_asyncio = asyncio.run
+    stderr_before_startup: list[str] = []
+
+    def run_after_banner(coroutine: Any) -> None:
+        """Record standard error before running startup and its logs."""
+        stderr_before_startup.append(capsys.readouterr().err)
+        run_asyncio(coroutine)
+
+    monkeypatch.setattr("stocknews.__main__.asyncio.run", run_after_banner)
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
     if git_sha is None:
@@ -486,7 +500,10 @@ def test_startup_logs_commit_before_missing_configuration(
         main()
 
     assert error.value.code == EXPECTED_CONFIGURATION_ERROR_EXIT_CODE
-    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    captured = capsys.readouterr()
+    assert stderr_before_startup == [EXPECTED_STOCKNEWS_BANNER + "\n\n"]
+    assert captured.err == ""
+    records = [json.loads(line) for line in captured.out.splitlines()]
     assert len(records) == EXPECTED_STARTUP_LOG_RECORD_COUNT
     assert records[0]["msg"] == "starting stocknews"
     assert records[0]["commit"] == expected_commit
@@ -499,12 +516,15 @@ def test_startup_logs_commit_before_missing_configuration(
 
 def test_cli_logs_sanitized_failure_without_secret_bearing_exception_chain(
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify startup logs omit secrets and tracebacks from raw exception chains."""
+    stderr_before_failure: list[str] = []
 
     def fail_to_run(coroutine) -> None:
         """Raise a sanitized runner failure after closing its supplied coroutine."""
+        stderr_before_failure.append(capsys.readouterr().err)
         coroutine.close()
         cause = RuntimeError(DUMMY_FAILURE_API_SECRET)
         error_message = "sanitized startup failure"
@@ -521,6 +541,7 @@ def test_cli_logs_sanitized_failure_without_secret_bearing_exception_chain(
     assert failure_record.error == "sanitized startup failure"
     assert DUMMY_FAILURE_API_SECRET not in caplog.text
     assert "Traceback" not in caplog.text
+    assert stderr_before_failure == [EXPECTED_STOCKNEWS_BANNER + "\n\n"]
 
 
 def test_cancel_and_wait_preserves_mixed_base_exception_group() -> None:

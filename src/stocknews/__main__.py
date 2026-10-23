@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 from contextlib import suppress
 from typing import TYPE_CHECKING, cast
 
@@ -22,6 +23,12 @@ from stocknews.runtime import run
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterable
+
+STOCKNEWS_BANNER = r"""     _             _
+ ___| |_ ___   ___| | ___ __   _____      _____
+/ __| __/ _ \ / __| |/ / '_ \ / _ \ \ /\ / / __|
+\__ \ || (_) | (__|   <| | | |  __/\ V  V /\__ \
+|___/\__\___/ \___|_|\_\_| |_|\___| \_/\_/ |___/"""
 
 
 async def _cancel_and_wait[T](task: asyncio.Task[T]) -> None:
@@ -176,6 +183,8 @@ async def _run() -> None:
 def main() -> None:
     """Validate startup configuration and run the command."""
     try:
+        sys.stderr.write(STOCKNEWS_BANNER + "\n\n")
+        sys.stderr.flush()
         asyncio.run(_run())
     except KeyboardInterrupt:
         return
