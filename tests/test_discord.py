@@ -16,6 +16,7 @@ from stocknews.models import NewsItem
 
 STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 TRANSPARENT_PNG = "https://major.io/transparent.png"
+AUTHOR_NAME_LIMIT = 256
 
 
 def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
@@ -87,43 +88,53 @@ def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("headline", "title", "color"),
+    ("symbol", "headline", "title", "color"),
     [
         (
+            "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
-            "💚 AAPL: Apple $223.00",
+            "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
             0x4CAF50,
         ),
         (
+            "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Lowers Price Target to $200",
-            "💔 AAPL: Apple $200.00",
+            "💔 AAPL · Goldman Sachs · Buy · Target ↓ $200",
             0xD42020,
         ),
         (
+            "NSC",
+            "RBC Capital Maintains Sector Perform on Norfolk Southern, Raises Price Target to $350.25",
+            "💚 NSC · RBC Capital · Sector Perform · Target ↑ $350.25",
+            0x4CAF50,
+        ),
+        (
+            "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Confirms positive outlook",
-            "❓ AAPL: Apple Buy",
+            "❓ AAPL · Goldman Sachs · Buy",
             0,
         ),
         (
+            "AMZN",
             "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135",
-            "💔 AMZN: Amazon $135.00",
+            "💔 AMZN · JPMorgan · Downgraded to Neutral · Target ↓ $135",
             0xD42020,
         ),
         (
+            "AAPL",
             "Baird Upgrades Apple to Outperform, Confirms positive outlook",
-            "💚 AAPL: Apple Upgraded to Outperform",
+            "💚 AAPL · Baird · Upgraded to Outperform",
             0x4CAF50,
         ),
     ],
 )
 def test_analyst_payload_formats_target_action_and_unknown_fallback(
+    symbol: str,
     headline: str,
     title: str,
     color: int,
 ) -> None:
     """Format analyst targets, colors, and fallback titles in webhook embeds."""
-    symbol = "AAPL" if "Apple" in headline else "AMZN"
-
     payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     expected = {
@@ -133,7 +144,6 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
                     "name": title,
                     "icon_url": f"https://static.stocktitan.net/company-logo/{symbol.lower()}.webp",
                 },
-                "description": headline,
                 "color": color,
             }
         ]
@@ -161,25 +171,25 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
         (
             "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target",
             "CME",
-            "💚 CME: CME Group $367.00",
+            "💚 CME · JP Morgan · Upgraded to Overweight · Target $367",
             0x4CAF50,
         ),
         (
             "Argus Research Downgrades Alcoa to Hold",
             "AA",
-            "💔 AA: Alcoa Downgraded to Hold",
+            "💔 AA · Argus Research · Downgraded to Hold",
             0xD42020,
         ),
         (
             "Argus Research Upgrades Equifax to Buy",
             "EFX",
-            "💚 EFX: Equifax Upgraded to Buy",
+            "💚 EFX · Argus Research · Upgraded to Buy",
             0x4CAF50,
         ),
         (
             "Citizens Upgrades Omega Healthcare Invts to Market Outperform",
             "OHI",
-            "💚 OHI: Omega Healthcare Invts Upgraded to Market Outperform",
+            "💚 OHI · Citizens · Upgraded to Market Outperform",
             0x4CAF50,
         ),
     ],
@@ -196,7 +206,7 @@ def test_analyst_payload_keeps_rating_changes_without_positive_target(
     assert payload is not None
     embed = payload["embeds"][0]
     assert embed["author"]["name"] == title
-    assert embed["description"] == headline
+    assert "description" not in embed
     assert embed["color"] == color
     assert "image" not in embed
     assert "thumbnail" not in embed
@@ -207,22 +217,27 @@ def test_analyst_payload_keeps_rating_changes_without_positive_target(
     [
         (
             "Firm Upgrades Example Corp to Buy, Maintains Price Target at $100",
-            "💚 EX: Example Corp $100.00",
+            "💚 EX · Firm · Upgraded to Buy · Target $100",
+            0x4CAF50,
+        ),
+        (
+            "Firm Upgrades Example Corp to Buy, Lowers Price Target to $90",
+            "💚 EX · Firm · Upgraded to Buy · Target ↓ $90",
             0x4CAF50,
         ),
         (
             "Firm Upgrades Example Corp to Buy, lowers Price Target to $90",
-            "💚 EX: Example Corp $90.00",
+            "💚 EX · Firm · Upgraded to Buy · Target $90",
             0x4CAF50,
         ),
         (
             "Firm Downgrades Example Corp to Sell, Raises Price Target to $110",
-            "💔 EX: Example Corp $110.00",
+            "💔 EX · Firm · Downgraded to Sell · Target ↑ $110",
             0xD42020,
         ),
         (
             "Firm upGRADES Example Corp to Buy, Raises Price Target to $110",
-            "💚 EX: Example Corp $110.00",
+            "💚 EX · Firm · Upgraded to Buy · Target ↑ $110",
             0x4CAF50,
         ),
     ],
@@ -242,6 +257,7 @@ def test_rating_direction_takes_priority_over_target_direction(
         "icon_url": "https://static.stocktitan.net/company-logo/ex.webp",
     }
     assert embed["color"] == color
+    assert "description" not in embed
     assert "image" not in embed
     assert "thumbnail" not in embed
 
@@ -276,12 +292,69 @@ def test_analyst_payload_uses_report_details_without_symbol() -> None:
     assert payload == {
         "embeds": [
             {
-                "author": {"name": "💔 Amazon $135.00"},
-                "description": headline,
+                "author": {"name": "💔 Amazon · JPMorgan · Downgraded to Neutral · Target ↓ $135"},
                 "color": 0xD42020,
             }
         ]
     }
+
+
+@pytest.mark.parametrize(
+    ("symbol", "headline", "author_name"),
+    [
+        (
+            "AAPL",
+            "Headline without a recognized analyst format",
+            "❓ AAPL · Headline without a recognized analyst format",
+        ),
+        (
+            "",
+            "Headline without a recognized analyst format",
+            "❓ Headline without a recognized analyst format",
+        ),
+    ],
+)
+def test_analyst_payload_uses_headline_for_unparsed_report(
+    symbol: str,
+    headline: str,
+    author_name: str,
+) -> None:
+    """Keep unparsed analyst headlines visible in the author line."""
+    payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert embed["author"]["name"] == author_name
+    assert embed["author"].get("icon_url") == (STOCK_LOGO.replace("%s", symbol.lower()) if symbol else None)
+    assert "description" not in embed
+
+
+def test_analyst_payload_truncates_long_parsed_author_and_keeps_headline() -> None:
+    """Keep long parsed firm names within Discord's author limit."""
+    headline = f"{'Firm ' + 'X' * 270} Upgrades Example Corp to Buy, Raises Price Target to $350"
+
+    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    author_name = embed["author"]["name"]
+    assert len(author_name) == AUTHOR_NAME_LIMIT
+    assert author_name.endswith("…")
+    assert embed["description"] == headline
+
+
+def test_analyst_payload_truncates_long_fallback_author_and_keeps_headline() -> None:
+    """Use the description only when an unparsed headline exceeds the author limit."""
+    headline = "No recognized analyst format " * 20
+
+    payload = analyst_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert len(embed["author"]["name"]) == AUTHOR_NAME_LIMIT
+    assert embed["author"]["name"].endswith("…")
+    assert embed["description"] == headline
+    assert embed["author"]["icon_url"] == STOCK_LOGO.replace("%s", "aapl")
 
 
 def test_news_payload_uses_headline_only_with_first_symbol_and_optional_url() -> None:

@@ -483,10 +483,9 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 "embeds": [
                     {
                         "author": {
-                            "name": "💚 AAPL: Apple $223.00",
+                            "name": "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
                             "icon_url": "https://static.stocktitan.net/company-logo/aapl.webp",
                         },
-                        "description": "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
                         "color": 0x4CAF50,
                     }
                 ]
@@ -680,12 +679,18 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
             "AAPL: Apple",
             "AAPL",
         ),
-        ((), "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223", "/analyst", "💚 Apple $223.00", ""),
+        (
+            (),
+            "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
+            "/analyst",
+            "💚 Apple · Goldman Sachs · Buy · Target ↑ $223",
+            "",
+        ),
         (
             ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "/analyst",
-            "💚 AAPL: Apple $223.00",
+            "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
             "AAPL",
         ),
         ((), "Apple announces a phone", "/news", "Apple announces a phone", ""),
@@ -792,16 +797,31 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
 
 
 @pytest.mark.parametrize(
-    ("symbol", "company", "headline", "color"),
+    ("symbol", "headline", "author_name", "color"),
     [
-        ("AA", "Alcoa", "Argus Research Downgrades Alcoa to Hold", 0xD42020),
-        ("EFX", "Equifax", "Argus Research Upgrades Equifax to Buy", 0x4CAF50),
-        ("OHI", "Omega Healthcare", "Citizens Upgrades Omega Healthcare Invts to Market Outperform", 0x4CAF50),
-        ("CME", "CME Group", "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target", 0x4CAF50),
         (
             "AA",
-            "Alcoa",
+            "Argus Research Downgrades Alcoa to Hold",
+            "💔 AA · Argus Research · Downgraded to Hold",
+            0xD42020,
+        ),
+        ("EFX", "Argus Research Upgrades Equifax to Buy", "💚 EFX · Argus Research · Upgraded to Buy", 0x4CAF50),
+        (
+            "OHI",
+            "Citizens Upgrades Omega Healthcare Invts to Market Outperform",
+            "💚 OHI · Citizens · Upgraded to Market Outperform",
+            0x4CAF50,
+        ),
+        (
+            "CME",
+            "JP Morgan Upgrades CME Group to Overweight, Announces $367 Price Target",
+            "💚 CME · JP Morgan · Upgraded to Overweight · Target $367",
+            0x4CAF50,
+        ),
+        (
+            "AA",
             "Argus Research Downgrades Alcoa to Hold, Maintains Price Target of $32",
+            "💔 AA · Argus Research · Downgraded to Hold · Target $32",
             0xD42020,
         ),
     ],
@@ -809,8 +829,8 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
 )
 def test_runtime_routes_rating_headlines_to_analyst_payloads(
     symbol: str,
-    company: str,
     headline: str,
+    author_name: str,
     color: int,
 ) -> None:
     """Verify rating headlines produce one correctly routed analyst delivery."""
@@ -841,11 +861,8 @@ def test_runtime_routes_rating_headlines_to_analyst_payloads(
         route, payload = requested[0]
         assert route == "/analyst"
         embed = payload["embeds"][0]
-        title = embed["author"]["name"]
-        assert symbol in title
-        assert company in title
-        assert "$0.00" not in title
-        assert embed["description"] == headline
+        assert embed["author"]["name"] == author_name
+        assert "description" not in embed
         assert embed["color"] == color
         records = [json.loads(line) for line in output.getvalue().splitlines()]
         sent = [record for record in records if record["msg"] == "sent Discord webhook"]
