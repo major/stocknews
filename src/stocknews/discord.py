@@ -56,13 +56,15 @@ def earnings_payload(
     headline: str,
     stock_logo: str,
     transparent_png: str,
+    company_name: str | None = None,
 ) -> WebhookPayload | None:
     """Build an earnings payload, or return None when no earnings data exists."""
     description = describe_earnings(headline)
     if not description:
         return None
 
-    title = f"{symbol}: {earnings_company_name(headline)}" if symbol else earnings_company_name(headline) or headline
+    name = company_name.strip() if company_name and company_name.strip() else earnings_company_name(headline)
+    title = f"{symbol}: {name}" if symbol else name or headline
     embed = _new_embed(title, stock_logo, symbol, transparent_png)
     embed["description"] = description
     return {"embeds": [embed]}

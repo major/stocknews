@@ -186,7 +186,7 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(  # noqa
     assert asset_requests[0].headers["APCA-API-KEY-ID"] == _API_KEY
     assert asset_requests[0].headers["APCA-API-SECRET-KEY"] == _API_SECRET
     assert [path for path, _title in deliveries] == ["/earnings", "/analyst", "/news", "/news", "/news"]
-    assert deliveries[0][1] == "AAPL: Apple"
+    assert deliveries[0][1] == "AAPL: Apple Inc."
     assert deliveries[1][1] == "AAPL · Apple Inc."
     assert analyst_payloads[0]["username"] == "Analyst Wire"
     assert analyst_payloads[0]["embeds"][0]["description"] == ("Target raised to $223 · Buy maintained · Goldman Sachs")

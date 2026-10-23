@@ -36,7 +36,7 @@ Read only what you need:
   at startup. Discord webhook lists are comma-separated.
 - `ALPACA_ASSETS_URL` defaults to `https://api.alpaca.markets`; use
   `https://paper-api.alpaca.markets` with paper-account credentials. Analyst
-  asset-name lookups run only for deliverable items and use a 1024-entry
+  and earnings asset-name lookups run only for deliverable items and share a 1024-entry
   in-memory LRU cache. Successful names live 24 hours, missing names 1 hour,
   and temporary errors 1 minute. A failed refresh retains a cached name, each
   lookup has a 2-second deadline, and the cache resets on restart.
