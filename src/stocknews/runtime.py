@@ -182,12 +182,17 @@ async def _close_iterator[T](stream: AsyncIterator[T]) -> None:
         await cast("Awaitable[None]", close())
 
 
-def _process_news_read(
+async def _process_news_read(
     state: _RunState,
     completed: set[asyncio.Task[object]],
     config: Config,
     logger: logging.Logger,
 ) -> bool:
+    """Process one completed news read and enqueue its enabled delivery.
+
+    REST pagination can produce bursts larger than the bounded queue, so those
+    deliveries wait for capacity. WebSocket delivery remains fail-fast on overflow.
+    """
     if state.news_read is None or cast("asyncio.Task[object]", state.news_read) not in completed:
         return False
 
@@ -215,11 +220,14 @@ def _process_news_read(
     )
     delivery = _make_delivery(message, config, logger)
     if delivery is not None:
-        try:
-            state.jobs.put_nowait(delivery)
-        except asyncio.QueueFull as error:
-            error_message = "Discord delivery queue is full"
-            raise RuntimeError(error_message) from error
+        if config.alpaca_news_mode == "rest":
+            await state.jobs.put(delivery)
+        else:
+            try:
+                state.jobs.put_nowait(delivery)
+            except asyncio.QueueFull as error:
+                error_message = "Discord delivery queue is full"
+                raise RuntimeError(error_message) from error
     if state.news_iterator is None:
         error_message = "news stream read completed without an active iterator"
         raise RuntimeError(error_message)
@@ -235,7 +243,7 @@ async def _pump_streams(state: _RunState, config: Config, logger: logging.Logger
         waiting: set[asyncio.Task[object]] = {cast("asyncio.Task[object]", state.news_read)}
         completed, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
 
-        if _process_news_read(state, completed, config, logger):
+        if await _process_news_read(state, completed, config, logger):
             return
 
 

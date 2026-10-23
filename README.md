@@ -1,8 +1,8 @@
 # stocknews
 
-stocknews is a Python 3.15 service that reads the Alpaca news stream and sends
-relevant alerts to Discord. It filters for Benzinga Newsdesk items and routes
-qualifying headlines to earnings, analyst, or general news webhooks.
+stocknews is a Python 3.15 service that reads Alpaca news and sends relevant
+alerts to Discord. It filters for Benzinga Newsdesk items and routes qualifying
+headlines to earnings, analyst, or general news webhooks.
 
 The package is in `src/stocknews/`. The `stocknews` console command starts the
 service.
@@ -13,8 +13,13 @@ service.
 |---|---|---|---|
 | `ALPACA_API_KEY` | Yes | None | Alpaca API key |
 | `ALPACA_API_SECRET` | Yes | None | Alpaca API secret |
+| `ALPACA_NEWS_MODE` | No | `websocket` | News source: `websocket` or `rest` |
 | `ALPACA_NEWS_STREAM_URL` | No | `wss://stream.data.alpaca.markets/v1beta1/news` | Alpaca news WebSocket URL |
 | `ALPACA_WS_AUTH_MODE` | No | `message` | Alpaca WebSocket authentication mode: `message` or `headers` |
+| `ALPACA_NEWS_REST_URL` | No | `https://data.alpaca.markets/v1beta1/news` | Alpaca REST news URL |
+| `NEWS_POLL_INTERVAL_SECONDS` | No | `300` | Seconds to wait after each REST poll attempt |
+| `NEWS_POLL_OVERLAP_SECONDS` | No | `600` | Seconds to overlap REST poll windows for catchup |
+| `NEWS_STATE_PATH` | No | `.stocknews/news.sqlite3` | SQLite file for REST article IDs and poll checkpoint |
 | `DISCORD_ANALYST_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for analyst ratings |
 | `DISCORD_ANALYST_ENABLED` | No | `true` | Enable analyst rating and price-target alerts |
 | `DISCORD_EARNINGS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for earnings |
@@ -27,6 +32,11 @@ service.
 Set configuration in the environment or in `.env` when using Compose. The two
 Alpaca credentials are required. Webhook lists are comma-separated; empty entries
 are ignored.
+
+`ALPACA_NEWS_MODE` defaults to `websocket`, which keeps the existing stream
+behavior. Set it to `rest` to poll the REST endpoint instead. The service does
+not run both sources at the same time. REST poll interval and overlap settings
+must be positive integers, and the overlap must be at least the interval.
 
 `ALPACA_WS_AUTH_MODE=message` is the default and preserves the current behavior
 of authenticating with an Alpaca stream message. Set it to `headers` to send
@@ -61,6 +71,37 @@ restarting the service.
 
 `ALPACA_STOCK_STREAM_URL` is no longer used and is ignored. SPY and QQQ remain
 valid news tickers, and stock logo behavior is unchanged.
+
+## REST news polling
+
+Enable REST polling by setting `ALPACA_NEWS_MODE=rest`. The service makes its
+first poll immediately, requesting the most recent 10 minutes by default. It
+reads every page, then waits 5 minutes after the attempt completes before
+polling again. Later windows use the persisted checkpoint and the configured
+overlap for catchup. The initial baseline is persisted even if a poll attempt
+fails. HTTP 401 and 403 responses are fatal. Other HTTP errors and invalid
+responses are retried on a later poll without advancing the completed window.
+
+REST results use the same Benzinga Newsdesk filters and category routing as
+WebSocket results. SQLite records article IDs before processing, so updates to
+an article and repeats across pages, polls, or restarts are suppressed. IDs are
+retained indefinitely, so the database grows over time. Filtered articles and
+articles in disabled categories are also marked seen; enabling a category later
+does not replay them. A crash after an ID is claimed but before its alert is
+sent can lose that alert. Exact Discord delivery and retry behavior are not
+guaranteed. Only REST uses this article ID deduplication. WebSocket
+deduplication is unchanged.
+
+Use one service instance for a REST state database. Do not delete the state file
+unless you want previously seen articles to be eligible for replay. Compose
+mounts the named `stocknews-state` volume at
+`/opt/app-root/src/.stocknews`, writable by runtime UID 1001. Running
+`podman compose down -v` removes that volume and its deduplication state. Any
+custom `NEWS_STATE_PATH` must also be persistent and writable by UID 1001.
+
+REST news access requires an Alpaca account entitlement. Account entitlement
+and news latency have not been verified. The 10-minute default overlap does not
+guarantee capture of articles that arrive later than the lookback window.
 
 ## Run locally
 

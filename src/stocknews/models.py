@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 AlpacaAuthMode = Literal["message", "headers"]
+AlpacaNewsMode = Literal["websocket", "rest"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -17,6 +18,7 @@ class NewsItem:
     url: str = ""
     source: str = ""
     content: str = ""
+    article_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -52,3 +54,8 @@ class Config:
     discord_earnings_enabled: bool = True
     discord_news_enabled: bool = True
     alpaca_ws_auth_mode: AlpacaAuthMode = "message"
+    alpaca_news_mode: AlpacaNewsMode = "websocket"
+    alpaca_news_rest_url: str = "https://data.alpaca.markets/v1beta1/news"
+    news_poll_interval_seconds: int = 300
+    news_poll_overlap_seconds: int = 600
+    news_state_path: str = ".stocknews/news.sqlite3"

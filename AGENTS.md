@@ -22,12 +22,18 @@ Read only what you need:
 ## Conventions
 
 - `ALPACA_API_KEY` and `ALPACA_API_SECRET` are required. Optional settings are
-  `ALPACA_NEWS_STREAM_URL`, `ALPACA_WS_AUTH_MODE`, `DISCORD_ANALYST_ENABLED`,
+  `ALPACA_NEWS_MODE`, `ALPACA_NEWS_STREAM_URL`, `ALPACA_WS_AUTH_MODE`,
+  `ALPACA_NEWS_REST_URL`, `NEWS_POLL_INTERVAL_SECONDS`,
+  `NEWS_POLL_OVERLAP_SECONDS`, `NEWS_STATE_PATH`, `DISCORD_ANALYST_ENABLED`,
   `DISCORD_ANALYST_WEBHOOKS`, `DISCORD_EARNINGS_ENABLED`,
-  `DISCORD_EARNINGS_WEBHOOKS`, `DISCORD_NEWS_ENABLED`,
-  `DISCORD_NEWS_WEBHOOKS`, `STOCK_LOGO`, and `TRANSPARENT_PNG`.
+  `DISCORD_EARNINGS_WEBHOOKS`, `DISCORD_NEWS_ENABLED`, `DISCORD_NEWS_WEBHOOKS`,
+  `STOCK_LOGO`, and `TRANSPARENT_PNG`.
   `ALPACA_WS_AUTH_MODE` defaults to `message` and accepts `message` or
   `headers`.
+  `ALPACA_NEWS_MODE` defaults to `websocket`; `rest` selects REST instead of
+  WebSocket. REST poll interval and overlap default to 300 and 600 seconds,
+  must be positive integers, and overlap must be at least the interval. REST
+  article IDs and checkpoints use `.stocknews/news.sqlite3` by default.
   The three category-enabled settings default to true and
   accept true/false, 1/0, yes/no, and on/off, case-insensitive with surrounding
   whitespace ignored. An explicitly empty or invalid value raises `ValueError`
@@ -39,6 +45,7 @@ Read only what you need:
 - Keep Python dependencies and the lockfile managed by uv. Use `uv sync --locked`.
 - Keep both combined statement-and-branch coverage and branch-only coverage at 95% or higher.
 - Preserve Benzinga Newsdesk filtering, earnings/analyst/general routing, and bounded worker behavior.
+- REST polling is opt-in and separate from WebSocket ingestion. It polls immediately, paginates fully, then waits after each attempt. Its SQLite state suppresses repeated article IDs across polls and restarts; state must persist and remain writable.
 - Container builds use a digest-pinned official Python 3.15.1 slim image on Debian Trixie and install locked runtime dependencies only. The runtime must remain non-root UID 1001.
 - Keep action versions pinned to commit SHAs.
 - Do not reintroduce the legacy Go runtime or tooling.

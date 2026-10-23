@@ -17,6 +17,7 @@ from stocknews.alpaca import (
 from stocknews.config import load_config
 from stocknews.logging import configure_logging, report_failure
 from stocknews.models import AlpacaSettings, Config, NewsItem
+from stocknews.rest_news import poll_news
 from stocknews.runtime import run
 
 if TYPE_CHECKING:
@@ -90,6 +91,18 @@ async def run_application(
         logger: Logger used for runtime events.
         stop_event: Event used to stop the stream adapters.
     """
+    if config.alpaca_news_mode == "rest":
+
+        async def connect_rest() -> AsyncIterable[NewsItem]:
+            """Return the configured Alpaca REST news poller."""
+            return poll_news(config, client, logger, stop_event)
+
+        try:
+            await run(config, client, logger, connect_rest)
+        finally:
+            stop_event.set()
+        return
+
     settings = AlpacaSettings(
         api_key=config.alpaca_api_key,
         api_secret=config.alpaca_api_secret,
