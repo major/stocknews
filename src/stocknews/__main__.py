@@ -94,6 +94,7 @@ async def run_application(
         api_key=config.alpaca_api_key,
         api_secret=config.alpaca_api_secret,
         news_stream_url=config.alpaca_news_stream_url,
+        auth_mode=config.alpaca_ws_auth_mode,
     )
     news_terminated: asyncio.Future[AlpacaStreamError] = asyncio.get_running_loop().create_future()
     handles: list[StreamHandle[NewsItem]] = []

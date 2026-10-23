@@ -716,18 +716,38 @@ def test_stream_events_propagates_preexisting_termination_before_queued_news() -
     asyncio.run(scenario())
 
 
-def test_run_application_shuts_down_on_termination_immediately_after_subscription() -> None:
+def _assert_auth_mode_handshake(
+    auth_mode: str,
+    requests: list[dict[str, object]],
+    handshake_headers: list[tuple[bytes, bytes]],
+) -> None:
+    """Verify the auth protocol and handshake headers match the configured mode."""
+    if auth_mode == "headers":
+        assert (b"apca-api-key-id", DUMMY_ALPACA_API_KEY.encode()) in handshake_headers
+        assert (b"apca-api-secret-key", DUMMY_ALPACA_API_SECRET.encode()) in handshake_headers
+        assert requests == [{"action": "subscribe", "news": ["*"]}]
+    else:
+        assert requests == [
+            {"action": "auth", "key": DUMMY_ALPACA_API_KEY, "secret": DUMMY_ALPACA_API_SECRET},
+            {"action": "subscribe", "news": ["*"]},
+        ]
+
+
+@pytest.mark.parametrize("auth_mode", ["message", "headers"], ids=["message-auth", "header-auth"])
+def test_run_application_shuts_down_on_termination_immediately_after_subscription(auth_mode: str) -> None:
     """Verify the application starts only news and safely shuts down on termination."""
 
     async def scenario() -> None:
         """Exercise normal startup with a legacy stock URL and terminal news error."""
         attempted_paths: list[str] = []
         requests: list[dict[str, object]] = []
+        handshake_headers: list[tuple[bytes, bytes]] = []
         disconnected = asyncio.Event()
 
         async def alpaca_app(scope, receive, send) -> None:
             """Record WebSocket requests and return a terminal news error."""
             attempted_paths.append(scope["path"])
+            handshake_headers.extend(scope["headers"])
             await receive()
             await send({"type": "websocket.accept"})
 
@@ -761,6 +781,7 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
             {
                 "ALPACA_API_KEY": DUMMY_ALPACA_API_KEY,
                 "ALPACA_API_SECRET": DUMMY_ALPACA_API_SECRET,
+                "ALPACA_WS_AUTH_MODE": auth_mode,
                 "ALPACA_NEWS_STREAM_URL": "ws://news.test/v1beta1/news",
                 "ALPACA_STOCK_STREAM_URL": "wss://stocks.test/v2",
                 "DISCORD_ANALYST_WEBHOOKS": "",
@@ -788,10 +809,8 @@ def test_run_application_shuts_down_on_termination_immediately_after_subscriptio
             pending_tasks.discard(current_task)
         assert not pending_tasks, f"pending tasks after news termination: {pending_tasks!r}"
         assert attempted_paths == ["/v1beta1/news"]
-        assert requests == [
-            {"action": "auth", "key": DUMMY_ALPACA_API_KEY, "secret": DUMMY_ALPACA_API_SECRET},
-            {"action": "subscribe", "news": ["*"]},
-        ]
+        _assert_auth_mode_handshake(auth_mode, requests, handshake_headers)
+        assert config.alpaca_ws_auth_mode == auth_mode
         assert config.alpaca_news_stream_url == "ws://news.test/v1beta1/news"
         assert DUMMY_ALPACA_API_SECRET not in str(error.value)
         assert DUMMY_ALPACA_API_KEY not in str(error.value)
