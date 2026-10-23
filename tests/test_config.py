@@ -22,9 +22,6 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
         }
     )
 
-    assert settings.alpaca_news_stream_url == "wss://stream.data.alpaca.markets/v1beta1/news"
-    assert settings.alpaca_ws_auth_mode == "message"
-    assert settings.alpaca_news_mode == "websocket"
     assert settings.alpaca_news_rest_url == "https://data.alpaca.markets/v1beta1/news"
     assert settings.news_poll_interval_seconds == _DEFAULT_NEWS_POLL_INTERVAL_SECONDS
     assert settings.news_poll_overlap_seconds == _DEFAULT_NEWS_POLL_OVERLAP_SECONDS
@@ -37,60 +34,6 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     assert settings.discord_analyst_enabled is True
     assert settings.discord_earnings_enabled is True
     assert settings.discord_news_enabled is True
-
-
-@pytest.mark.parametrize("value", ["message", "headers", " HEADERS "])
-def test_config_parses_alpaca_ws_auth_mode(value: str) -> None:
-    """Parse supported Alpaca WebSocket authentication modes."""
-    settings = load_config(
-        {
-            "ALPACA_API_KEY": "key",
-            "ALPACA_API_SECRET": "secret",
-            "ALPACA_WS_AUTH_MODE": value,
-        }
-    )
-
-    assert settings.alpaca_ws_auth_mode == value.strip().casefold()
-
-
-@pytest.mark.parametrize("value", ["", "  ", "invalid"])
-def test_config_rejects_invalid_alpaca_ws_auth_mode(value: str) -> None:
-    """Reject empty or unsupported Alpaca WebSocket authentication modes."""
-    with pytest.raises(ValueError, match="ALPACA_WS_AUTH_MODE"):
-        load_config(
-            {
-                "ALPACA_API_KEY": "key",
-                "ALPACA_API_SECRET": "secret",
-                "ALPACA_WS_AUTH_MODE": value,
-            }
-        )
-
-
-@pytest.mark.parametrize("value", ["websocket", "rest", " REST ", "WeBsOcKeT"])
-def test_config_parses_alpaca_news_mode(value: str) -> None:
-    """Parse supported Alpaca news modes after trimming and case folding."""
-    settings = load_config(
-        {
-            "ALPACA_API_KEY": "key",
-            "ALPACA_API_SECRET": "secret",
-            "ALPACA_NEWS_MODE": value,
-        }
-    )
-
-    assert settings.alpaca_news_mode == value.strip().casefold()
-
-
-@pytest.mark.parametrize("value", ["", "  ", "invalid"])
-def test_config_rejects_invalid_alpaca_news_mode(value: str) -> None:
-    """Reject empty or unsupported Alpaca news modes."""
-    with pytest.raises(ValueError, match="ALPACA_NEWS_MODE"):
-        load_config(
-            {
-                "ALPACA_API_KEY": "key",
-                "ALPACA_API_SECRET": "secret",
-                "ALPACA_NEWS_MODE": value,
-            }
-        )
 
 
 @pytest.mark.parametrize(
@@ -221,7 +164,7 @@ def test_config_checks_overlap_against_default_for_unset_poll_setting(
 
 
 def test_news_item_article_id_is_optional() -> None:
-    """Keep WebSocket news items valid without an article identifier."""
+    """Keep news items valid without an article identifier."""
     news_item = NewsItem(symbols=(), author="", headline="")
 
     assert news_item.article_id is None
@@ -315,16 +258,27 @@ def test_config_preserves_explicitly_empty_optional_values() -> None:
         {
             "ALPACA_API_KEY": " key ",
             "ALPACA_API_SECRET": "secret",
-            "ALPACA_NEWS_STREAM_URL": "",
             "STOCK_LOGO": "",
             "TRANSPARENT_PNG": "",
         }
     )
 
     assert settings.alpaca_api_key == " key "
-    assert settings.alpaca_news_stream_url == ""
     assert settings.stock_logo == ""
     assert settings.transparent_png == ""
+
+
+@pytest.mark.parametrize(
+    "env_key",
+    ["ALPACA_NEWS_MODE", "ALPACA_NEWS_STREAM_URL", "ALPACA_WS_AUTH_MODE"],
+)
+def test_config_ignores_obsolete_websocket_settings(env_key: str) -> None:
+    """Ignore removed WebSocket settings, including invalid values."""
+    environ = {"ALPACA_API_KEY": "key", "ALPACA_API_SECRET": "secret"}
+    config_without_obsolete_setting = load_config(environ)
+    config_with_obsolete_setting = load_config({**environ, env_key: "invalid"})
+
+    assert config_with_obsolete_setting == config_without_obsolete_setting
 
 
 @pytest.mark.parametrize(

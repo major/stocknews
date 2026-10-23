@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Python 3.15 service that reads the Alpaca news stream, filters Benzinga Newsdesk
+Python 3.15 service that polls Alpaca's REST news API, filters Benzinga Newsdesk
 items, and sends Discord webhook embeds.
 
 ## Commands
@@ -16,14 +16,15 @@ items, and sends Discord webhook embeds.
 
 ## Architecture
 **src/stocknews/__main__.py**: CLI startup, signal handling, and application lifecycle
-**src/stocknews/alpaca.py**: Alpaca news WebSocket adapter
-**src/stocknews/runtime.py**: News stream orchestration and bounded Discord delivery
+**src/stocknews/rest_news.py**: Alpaca REST polling and pagination
+**src/stocknews/news_state.py**: SQLite article deduplication and poll checkpoints
+**src/stocknews/runtime.py**: News orchestration and bounded Discord delivery
 **src/stocknews/news.py**: Benzinga Newsdesk filtering and classification
 **src/stocknews/earnings.py** and **analyst.py**: Headline parsing and routing rules
 **src/stocknews/discord.py**: Discord embed payloads and webhook requests
 **src/stocknews/config.py** and **models.py**: Environment configuration and domain types
 **src/stocknews/logging.py**: Structured JSON logs and webhook URL redaction
 
-**Flow**: Alpaca news stream → filter → classify as earnings, analyst, or general news → Discord
+**Flow**: Alpaca REST polling → filter → classify as earnings, analyst, or general news → Discord
 
-**Stack**: Python 3.15.1, uv 0.13.5, httpx2 WebSockets, and Discord webhooks
+**Stack**: Python 3.15.1, uv 0.13.5, httpx2, and Discord webhooks

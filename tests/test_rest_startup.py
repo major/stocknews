@@ -41,12 +41,10 @@ class _LastReceiptObserver(logging.Handler):
 
 
 def _config(state_path: Path) -> Config:
-    """Build a REST-mode configuration using temporary durable state."""
+    """Build a default REST configuration using temporary durable state."""
     return Config(
         alpaca_api_key=_API_KEY,
         alpaca_api_secret=_API_SECRET,
-        alpaca_news_stream_url="wss://news.test/v1beta1/news",
-        alpaca_news_mode="rest",
         alpaca_news_rest_url="https://alpaca.test/v1beta1/news",
         news_poll_interval_seconds=1,
         news_poll_overlap_seconds=1,
@@ -84,12 +82,6 @@ def _response(news: list[dict[str, Any]], next_page_token: str | None = None) ->
     return httpx2.Response(200, json={"news": news, "next_page_token": next_page_token})
 
 
-def _fail_websocket_start(*_args: object, **_kwargs: object) -> None:
-    """Fail if REST mode attempts to open the WebSocket adapter."""
-    message = "REST mode must not start the WebSocket adapter"
-    raise AssertionError(message)
-
-
 async def _poll_immediately(stop_event: asyncio.Event, _interval_seconds: int) -> None:
     """Yield control between polls without waiting for a real interval."""
     await asyncio.sleep(0)
@@ -100,8 +92,7 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Route REST news through the real runtime and persist deduplication state."""
-    monkeypatch.setattr("stocknews.__main__.start_news_stream", _fail_websocket_start)
+    """Route default REST news through runtime and persist deduplication state."""
     monkeypatch.setattr("stocknews.rest_news._wait_for_next_poll", _poll_immediately)
     state_path = tmp_path / "news.sqlite3"
     config = _config(state_path)
@@ -193,12 +184,8 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(
     assert state_path.is_file()
 
 
-def test_rest_startup_authentication_failure_sets_stop_event_and_skips_websocket(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_rest_startup_authentication_failure_sets_stop_event(tmp_path: Path) -> None:
     """Propagate REST authentication errors and stop the poller during cleanup."""
-    monkeypatch.setattr("stocknews.__main__.start_news_stream", _fail_websocket_start)
     requests: list[httpx2.Request] = []
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
@@ -228,11 +215,9 @@ def test_rest_startup_authentication_failure_sets_stop_event_and_skips_websocket
 
 def test_rest_startup_backpressures_batches_larger_than_delivery_queue(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Wait for delivery capacity and send every item from a large REST page."""
-    monkeypatch.setattr("stocknews.__main__.start_news_stream", _fail_websocket_start)
     article_count = DELIVERY_QUEUE_CAPACITY + _BACKPRESSURE_EXTRA_ITEMS
     final_symbols = (f"SYM{article_count - 1}",)
     first_delivery_started = asyncio.Event()
@@ -301,9 +286,8 @@ def test_rest_startup_backpressures_batches_larger_than_delivery_queue(
     assert stop_event.is_set()
 
 
-def test_rest_startup_cancellation_sets_stop_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rest_startup_cancellation_sets_stop_event(tmp_path: Path) -> None:
     """Stop the REST poller when application shutdown cancels a pending request."""
-    monkeypatch.setattr("stocknews.__main__.start_news_stream", _fail_websocket_start)
     request_started = asyncio.Event()
 
     async def handler(_request: httpx2.Request) -> httpx2.Response:
