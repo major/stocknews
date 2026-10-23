@@ -14,6 +14,7 @@ service.
 | `ALPACA_API_KEY` | Yes | None | Alpaca API key |
 | `ALPACA_API_SECRET` | Yes | None | Alpaca API secret |
 | `ALPACA_NEWS_REST_URL` | No | `https://data.alpaca.markets/v1beta1/news` | Alpaca REST news URL |
+| `ALPACA_ASSETS_URL` | No | `https://api.alpaca.markets` | Alpaca Assets API base URL for analyst company names |
 | `NEWS_POLL_INTERVAL_SECONDS` | No | `300` | Seconds to wait after each REST poll attempt |
 | `NEWS_POLL_OVERLAP_SECONDS` | No | `600` | Seconds to overlap REST poll windows for catchup |
 | `NEWS_STATE_PATH` | No | `.stocknews/news.sqlite3` | SQLite file for REST article IDs and poll checkpoint |
@@ -29,6 +30,10 @@ service.
 Set configuration in the environment or in `.env` when using Compose. The two
 Alpaca credentials are required. Webhook lists are comma-separated; empty
 entries are ignored.
+
+`ALPACA_ASSETS_URL` sets the base URL for Alpaca asset-name lookups. Use
+`https://paper-api.alpaca.markets` when running with paper-account credentials.
+Use the live API default with live-account credentials.
 
 The service uses REST polling for Alpaca news. Poll interval and overlap settings
 must be positive integers, and the overlap must be at least the interval.
@@ -58,6 +63,15 @@ retained ticker, or no ticker prefix and a transparent thumbnail for tickerless
 news. Headlines are not blocked by phrase. Webhooks are still required to send
 alerts, and empty webhook lists send nothing. Setting changes take effect after
 restarting the service.
+
+Analyst alerts use a compact title with the stock ticker and Alpaca security
+name when available. The description contains the price target, rating, and
+firm, and the sender name is `Analyst Wire`. Only analyst items that pass the
+delivery filters trigger an asset-name lookup. Names use a 1024-entry in-memory
+LRU cache: successful lookups last 24 hours, missing names last 1 hour, and
+temporary errors last 1 minute. A failed refresh retains a previously cached
+name; without a cached name, the title uses the ticker only. Each lookup has a
+2-second deadline, and the cache resets when the service restarts.
 
 `ALPACA_STOCK_STREAM_URL` is no longer used and is ignored. SPY and QQQ remain
 valid news tickers, and stock logo behavior is unchanged.

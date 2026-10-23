@@ -7,6 +7,7 @@ from stocknews.models import NewsItem
 
 _DEFAULT_NEWS_POLL_INTERVAL_SECONDS = 300
 _DEFAULT_NEWS_POLL_OVERLAP_SECONDS = 600
+_DEFAULT_ALPACA_ASSETS_URL = "https://api.alpaca.markets"
 _ARTICLE_ID = 123
 
 
@@ -23,6 +24,7 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     )
 
     assert settings.alpaca_news_rest_url == "https://data.alpaca.markets/v1beta1/news"
+    assert settings.alpaca_assets_url == _DEFAULT_ALPACA_ASSETS_URL
     assert settings.news_poll_interval_seconds == _DEFAULT_NEWS_POLL_INTERVAL_SECONDS
     assert settings.news_poll_overlap_seconds == _DEFAULT_NEWS_POLL_OVERLAP_SECONDS
     assert settings.news_state_path == ".stocknews/news.sqlite3"
@@ -34,6 +36,53 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
     assert settings.discord_analyst_enabled is True
     assert settings.discord_earnings_enabled is True
     assert settings.discord_news_enabled is True
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("http://assets.example.test", "http://assets.example.test"),
+        ("https://paper-api.alpaca.markets", "https://paper-api.alpaca.markets"),
+        ("https://assets.example.test/base/", "https://assets.example.test/base"),
+    ],
+)
+def test_config_loads_alpaca_assets_base_url(value: str, expected: str) -> None:
+    """Load the assets API base URL and normalize trailing slashes."""
+    settings = load_config(
+        {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_API_SECRET": "secret",
+            "ALPACA_ASSETS_URL": value,
+        }
+    )
+
+    assert settings.alpaca_assets_url == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "  ",
+        "relative/path",
+        "ftp://assets.example.test",
+        "https:///missing-host",
+        "https://user:secret@assets.example.test",
+        "https://assets.example.test?query=1",
+        "https://assets.example.test#fragment",
+        "https://assets.example.test:invalid",
+    ],
+)
+def test_config_rejects_invalid_alpaca_assets_base_url(value: str) -> None:
+    """Reject blank, relative, or malformed Alpaca assets base URLs."""
+    with pytest.raises(ValueError, match="ALPACA_ASSETS_URL"):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                "ALPACA_ASSETS_URL": value,
+            }
+        )
 
 
 @pytest.mark.parametrize(
