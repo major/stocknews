@@ -17,7 +17,9 @@ LABEL org.opencontainers.image.revision="${GIT_SHA}" \
 
 WORKDIR /opt/app-root/src
 
-RUN useradd --uid 1001 --gid 0 --home-dir /opt/app-root/src --no-create-home stocknews
+RUN useradd --uid 1001 --gid 0 --home-dir /opt/app-root/src --no-create-home stocknews \
+    && mkdir -p /opt/app-root/src/.stocknews \
+    && chown 1001:0 /opt/app-root/src/.stocknews
 
 COPY --from=builder --chown=1001:0 /opt/app-root/src/.venv /opt/app-root/src/.venv
 

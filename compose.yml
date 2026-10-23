@@ -6,4 +6,9 @@ services:
       dockerfile: Containerfile
     env_file:
       - .env
+    volumes:
+      - stocknews-state:/opt/app-root/src/.stocknews
     restart: unless-stopped
+
+volumes:
+  stocknews-state:

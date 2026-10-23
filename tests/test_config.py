@@ -3,6 +3,11 @@
 import pytest
 
 from stocknews.config import csv_values, load_config
+from stocknews.models import NewsItem
+
+_DEFAULT_NEWS_POLL_INTERVAL_SECONDS = 300
+_DEFAULT_NEWS_POLL_OVERLAP_SECONDS = 600
+_ARTICLE_ID = 123
 
 
 def test_config_applies_defaults_and_parses_csv_values() -> None:
@@ -19,6 +24,11 @@ def test_config_applies_defaults_and_parses_csv_values() -> None:
 
     assert settings.alpaca_news_stream_url == "wss://stream.data.alpaca.markets/v1beta1/news"
     assert settings.alpaca_ws_auth_mode == "message"
+    assert settings.alpaca_news_mode == "websocket"
+    assert settings.alpaca_news_rest_url == "https://data.alpaca.markets/v1beta1/news"
+    assert settings.news_poll_interval_seconds == _DEFAULT_NEWS_POLL_INTERVAL_SECONDS
+    assert settings.news_poll_overlap_seconds == _DEFAULT_NEWS_POLL_OVERLAP_SECONDS
+    assert settings.news_state_path == ".stocknews/news.sqlite3"
     assert settings.stock_logo == "https://static.stocktitan.net/company-logo/%s.webp"
     assert settings.transparent_png == "https://major.io/transparent.png"
     assert settings.discord_analyst_webhooks == ("a", "b")
@@ -54,6 +64,174 @@ def test_config_rejects_invalid_alpaca_ws_auth_mode(value: str) -> None:
                 "ALPACA_WS_AUTH_MODE": value,
             }
         )
+
+
+@pytest.mark.parametrize("value", ["websocket", "rest", " REST ", "WeBsOcKeT"])
+def test_config_parses_alpaca_news_mode(value: str) -> None:
+    """Parse supported Alpaca news modes after trimming and case folding."""
+    settings = load_config(
+        {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_API_SECRET": "secret",
+            "ALPACA_NEWS_MODE": value,
+        }
+    )
+
+    assert settings.alpaca_news_mode == value.strip().casefold()
+
+
+@pytest.mark.parametrize("value", ["", "  ", "invalid"])
+def test_config_rejects_invalid_alpaca_news_mode(value: str) -> None:
+    """Reject empty or unsupported Alpaca news modes."""
+    with pytest.raises(ValueError, match="ALPACA_NEWS_MODE"):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                "ALPACA_NEWS_MODE": value,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("env_key", "field_name", "value"),
+    [
+        ("ALPACA_NEWS_REST_URL", "alpaca_news_rest_url", " https://example.test/news "),
+        ("NEWS_STATE_PATH", "news_state_path", " /tmp/news.sqlite3 "),
+    ],
+)
+def test_config_preserves_nonblank_rest_settings(
+    env_key: str,
+    field_name: str,
+    value: str,
+) -> None:
+    """Load nonblank REST URL and state path values without changing them."""
+    settings = load_config(
+        {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_API_SECRET": "secret",
+            env_key: value,
+        }
+    )
+
+    assert getattr(settings, field_name) == value
+
+
+@pytest.mark.parametrize("env_key", ["ALPACA_NEWS_REST_URL", "NEWS_STATE_PATH"])
+@pytest.mark.parametrize("value", ["", "  ", "\t"])
+def test_config_rejects_blank_rest_settings(env_key: str, value: str) -> None:
+    """Reject empty or whitespace-only REST URL and state path settings."""
+    with pytest.raises(ValueError, match=env_key):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                env_key: value,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("env_key", "field_name", "value", "expected"),
+    [
+        ("NEWS_POLL_INTERVAL_SECONDS", "news_poll_interval_seconds", "1", 1),
+        ("NEWS_POLL_INTERVAL_SECONDS", "news_poll_interval_seconds", "45", 45),
+        ("NEWS_POLL_OVERLAP_SECONDS", "news_poll_overlap_seconds", "600", 600),
+        ("NEWS_POLL_OVERLAP_SECONDS", "news_poll_overlap_seconds", "900", 900),
+    ],
+)
+def test_config_parses_news_poll_seconds(
+    env_key: str,
+    field_name: str,
+    value: str,
+    expected: int,
+) -> None:
+    """Parse positive news polling settings as integers."""
+    settings = load_config(
+        {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_API_SECRET": "secret",
+            env_key: value,
+        }
+    )
+
+    assert getattr(settings, field_name) == expected
+
+
+@pytest.mark.parametrize(
+    "env_key",
+    ["NEWS_POLL_INTERVAL_SECONDS", "NEWS_POLL_OVERLAP_SECONDS"],
+)
+@pytest.mark.parametrize("value", ["", "  ", "0", "-1", "1.5", "invalid"])
+def test_config_rejects_nonpositive_or_invalid_news_poll_seconds(
+    env_key: str,
+    value: str,
+) -> None:
+    """Reject blank, non-integer, zero, and negative polling settings."""
+    with pytest.raises(ValueError, match=env_key):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                env_key: value,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("interval", "overlap"),
+    [("300", "299"), ("301", "300"), ("900", "600")],
+)
+def test_config_rejects_overlap_shorter_than_interval(
+    interval: str,
+    overlap: str,
+) -> None:
+    """Reject polling overlap values shorter than the polling interval."""
+    with pytest.raises(ValueError, match="NEWS_POLL_OVERLAP_SECONDS"):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                "NEWS_POLL_INTERVAL_SECONDS": interval,
+                "NEWS_POLL_OVERLAP_SECONDS": overlap,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("env_key", "value"),
+    [
+        ("NEWS_POLL_INTERVAL_SECONDS", "601"),
+        ("NEWS_POLL_OVERLAP_SECONDS", "299"),
+    ],
+)
+def test_config_checks_overlap_against_default_for_unset_poll_setting(
+    env_key: str,
+    value: str,
+) -> None:
+    """Check the overlap constraint when the other polling value is defaulted."""
+    with pytest.raises(ValueError, match="NEWS_POLL_OVERLAP_SECONDS"):
+        load_config(
+            {
+                "ALPACA_API_KEY": "key",
+                "ALPACA_API_SECRET": "secret",
+                env_key: value,
+            }
+        )
+
+
+def test_news_item_article_id_is_optional() -> None:
+    """Keep WebSocket news items valid without an article identifier."""
+    news_item = NewsItem(symbols=(), author="", headline="")
+
+    assert news_item.article_id is None
+
+
+def test_news_item_accepts_article_id() -> None:
+    """Store a positive article identifier on a news item."""
+    news_item = NewsItem(symbols=(), author="", headline="", article_id=_ARTICLE_ID)
+
+    assert news_item.article_id == _ARTICLE_ID
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,7 @@ from stocknews.__main__ import run_application
 from stocknews.config import load_config
 from stocknews.logging import JSONFormatter, configure_logging
 from stocknews.models import Config, NewsItem
-from stocknews.runtime import _STREAM_ENDED, _next, _settle_task, run
+from stocknews.runtime import _STREAM_ENDED, DELIVERY_QUEUE_CAPACITY, _next, _settle_task, run
 
 _STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 _TRANSPARENT_PNG = "https://major.io/transparent.png"
@@ -237,6 +237,25 @@ class _LogMessageEvent(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if record.getMessage() == self._message:
             self._observed.set()
+
+
+class _NewsReceiptObserver(logging.Handler):
+    """Record received headlines and signal when the delivery queue is blocked."""
+
+    def __init__(self, blocked_headline_count: int) -> None:
+        """Initialize the receipt list and queue-blocked signal."""
+        super().__init__()
+        self.blocked_headline_count = blocked_headline_count
+        self.headlines: list[str] = []
+        self.queue_blocked = asyncio.Event()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Record each news receipt and signal at the expected backpressure point."""
+        if record.getMessage() != "received news item":
+            return
+        self.headlines.append(record.headline)
+        if len(self.headlines) == self.blocked_headline_count:
+            self.queue_blocked.set()
 
 
 def _config() -> Config:
@@ -1699,6 +1718,158 @@ def test_full_delivery_queue_fails_runtime_without_waiting() -> None:
                 assert not pending_tasks, f"unexpected tasks after queue overflow: {pending_tasks!r}"
             finally:
                 release_request.set()
+                if not runtime.done():
+                    runtime.cancel()
+                await asyncio.gather(runtime, return_exceptions=True)
+                await _cancel_tasks_started_after(existing_tasks)
+
+    asyncio.run(scenario())
+
+
+def test_rest_news_burst_applies_bounded_backpressure_and_delivers_once() -> None:  # noqa: PLR0915
+    """Verify REST bursts wait for queue space and deliver every article once."""
+
+    async def scenario() -> None:  # noqa: PLR0915
+        """Block the worker, verify backpressure, and drain the REST burst."""
+        article_ids = tuple(range(1, DELIVERY_QUEUE_CAPACITY + 6))
+        headlines = [f"Article {article_id}" for article_id in article_ids]
+        items = [
+            NewsItem(
+                article_id=article_id,
+                symbols=("AAPL",),
+                author="Benzinga Newsdesk",
+                headline=headline,
+            )
+            for article_id, headline in zip(article_ids, headlines, strict=True)
+        ]
+        first_request_started = asyncio.Event()
+        release_first_request = asyncio.Event()
+        stream_closed = asyncio.Event()
+        yielded_ids: list[int] = []
+        delivered_titles: list[str] = []
+        observer = _NewsReceiptObserver(DELIVERY_QUEUE_CAPACITY + 2)
+        logger = _logger(StringIO())
+        logger.addHandler(observer)
+
+        async def handle_webhook(request: httpx2.Request) -> httpx2.Response:
+            """Hold the first delivery and record successful webhook titles."""
+            title = _payload_title(json.loads(request.content))
+            if title == "AAPL: Article 1":
+                first_request_started.set()
+                await release_first_request.wait()
+            delivered_titles.append(title)
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return an iterator that records each REST article exactly once."""
+
+            async def events() -> AsyncIterator[NewsItem]:
+                """Yield a larger-than-capacity REST burst and track iterator closure."""
+                try:
+                    for item in items:
+                        yielded_ids.append(item.article_id)
+                        yield item
+                finally:
+                    stream_closed.set()
+
+            return events()
+
+        config = replace(_config(), alpaca_news_mode="rest")
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle_webhook), timeout=10) as client:
+            existing_tasks = asyncio.all_tasks()
+            runtime = asyncio.create_task(run(config, client, logger, connect_news))
+            try:
+                await asyncio.wait_for(first_request_started.wait(), timeout=1)
+                await asyncio.wait_for(observer.queue_blocked.wait(), timeout=1)
+
+                assert yielded_ids == list(article_ids[: DELIVERY_QUEUE_CAPACITY + 2])
+                assert observer.headlines == headlines[: DELIVERY_QUEUE_CAPACITY + 2]
+                assert delivered_titles == []
+                assert not runtime.done()
+
+                release_first_request.set()
+                await asyncio.wait_for(runtime, timeout=2)
+
+                assert yielded_ids == list(article_ids)
+                assert observer.headlines == headlines
+                assert delivered_titles == [f"AAPL: {headline}" for headline in headlines]
+                assert len(delivered_titles) == len(set(delivered_titles))
+                assert stream_closed.is_set()
+            finally:
+                release_first_request.set()
+                if not runtime.done():
+                    runtime.cancel()
+                await asyncio.gather(runtime, return_exceptions=True)
+                await _cancel_tasks_started_after(existing_tasks)
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_while_rest_delivery_queue_is_blocked_cleans_up() -> None:  # noqa: PLR0915
+    """Verify cancellation releases a REST producer blocked on the full queue."""
+
+    async def scenario() -> None:
+        """Cancel the blocked producer and verify worker and iterator cleanup."""
+        items = [
+            NewsItem(
+                article_id=article_id,
+                symbols=("AAPL",),
+                author="Benzinga Newsdesk",
+                headline=f"Article {article_id}",
+            )
+            for article_id in range(1, DELIVERY_QUEUE_CAPACITY + 6)
+        ]
+        first_request_started = asyncio.Event()
+        release_first_request = asyncio.Event()
+        delivery_cancelled = asyncio.Event()
+        stream_closed = asyncio.Event()
+        observer = _NewsReceiptObserver(DELIVERY_QUEUE_CAPACITY + 2)
+        logger = _logger(StringIO())
+        logger.addHandler(observer)
+
+        async def handle_webhook(_request: httpx2.Request) -> httpx2.Response:
+            """Hold the active webhook and report cancellation from runtime cleanup."""
+            first_request_started.set()
+            try:
+                await release_first_request.wait()
+            except asyncio.CancelledError:
+                delivery_cancelled.set()
+                raise
+            return httpx2.Response(204)
+
+        async def connect_news() -> AsyncIterable[NewsItem]:
+            """Return a REST stream that remains open until runtime cleanup."""
+
+            async def events() -> AsyncIterator[NewsItem]:
+                """Yield enough articles to block the runtime on the bounded queue."""
+                try:
+                    for item in items:
+                        yield item
+                finally:
+                    stream_closed.set()
+
+            return events()
+
+        config = replace(_config(), alpaca_news_mode="rest")
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handle_webhook), timeout=10) as client:
+            existing_tasks = asyncio.all_tasks()
+            runtime = asyncio.create_task(run(config, client, logger, connect_news))
+            try:
+                await asyncio.wait_for(first_request_started.wait(), timeout=1)
+                await asyncio.wait_for(observer.queue_blocked.wait(), timeout=1)
+                assert len(observer.headlines) == DELIVERY_QUEUE_CAPACITY + 2
+                assert not runtime.done()
+
+                runtime.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(runtime, timeout=1)
+
+                assert delivery_cancelled.is_set()
+                assert stream_closed.is_set()
+                pending_tasks = _tasks_started_after(existing_tasks)
+                assert not pending_tasks, f"pending tasks after REST cancellation: {pending_tasks!r}"
+            finally:
+                release_first_request.set()
                 if not runtime.done():
                     runtime.cancel()
                 await asyncio.gather(runtime, return_exceptions=True)
