@@ -284,13 +284,14 @@ def test_analyst_payload_uses_report_details_without_symbol() -> None:
     }
 
 
-def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> None:
-    """Use the first symbol and omit empty news fields from the embed."""
+def test_news_payload_uses_headline_only_with_first_symbol_and_optional_url() -> None:
+    """Keep general-news embeds to the headline and optional URL, without body or image."""
     item = NewsItem(
         symbols=("AAPL", "MSFT"),
         author="Benzinga Newsdesk",
         headline="Apple releases new iPhone",
         summary="Company announcement",
+        content="Full article body",
         url="https://example.test/news",
     )
 
@@ -300,9 +301,7 @@ def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> Non
         "embeds": [
             {
                 "title": "AAPL: Apple releases new iPhone",
-                "description": "Company announcement",
                 "url": "https://example.test/news",
-                "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
             }
         ]
@@ -319,7 +318,6 @@ def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> Non
         "embeds": [
             {
                 "title": "AAPL: Apple headline",
-                "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
             }
         ]
@@ -332,7 +330,6 @@ def test_news_payload_uses_first_symbol_and_omits_empty_optional_fields() -> Non
         "embeds": [
             {
                 "title": "No symbol",
-                "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": TRANSPARENT_PNG},
             }
         ]

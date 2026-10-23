@@ -423,6 +423,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 author="Benzinga Newsdesk",
                 headline="Apple &amp;amp; launches a new iPhone",
                 summary="Company announcement",
+                content="Full article body",
                 url="https://example.test/news",
             ),
         )
@@ -475,9 +476,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 "embeds": [
                     {
                         "title": "AAPL: Apple &amp; launches a new iPhone",
-                        "description": "Company announcement",
                         "url": "https://example.test/news",
-                        "image": {"url": _TRANSPARENT_PNG},
                         "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                     }
                 ]

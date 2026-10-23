@@ -118,12 +118,13 @@ def news_payload(
     stock_logo: str,
     transparent_png: str,
 ) -> WebhookPayload:
-    """Build a general-news payload using its first symbol when available."""
+    """Build a headline-only general-news payload with a symbol thumbnail."""
     symbol = next(iter(item.symbols), "")
     title = f"{symbol}: {item.headline}" if symbol else item.headline
-    embed = _new_embed(title, stock_logo, symbol, transparent_png)
-    if item.summary:
-        embed["description"] = item.summary
+    embed: Embed = {
+        "title": title,
+        "thumbnail": {"url": stock_logo.replace("%s", symbol.lower()) if symbol else transparent_png},
+    }
     if item.url:
         embed["url"] = item.url
     return {"embeds": [embed]}
