@@ -17,6 +17,7 @@ from stocknews.models import NewsItem
 STOCK_LOGO = "https://static.stocktitan.net/company-logo/%s.webp"
 TRANSPARENT_PNG = "https://major.io/transparent.png"
 AUTHOR_NAME_LIMIT = 256
+USERNAME_LIMIT = 80
 
 
 def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
@@ -38,6 +39,7 @@ def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
             }
         ]
     }
+    assert "username" not in payload
 
     requests: list[httpx2.Request] = []
 
@@ -74,6 +76,7 @@ def test_earnings_payload_uses_company_name_without_symbol() -> None:
             }
         ]
     }
+    assert "username" not in payload
 
 
 def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
@@ -88,43 +91,49 @@ def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("symbol", "headline", "title", "color"),
+    ("symbol", "headline", "title", "color", "username"),
     [
         (
             "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "💚 AAPL · Goldman Sachs · Buy · Target ↑ $223",
             0x4CAF50,
+            "Analyst Wire · Goldman Sachs",
         ),
         (
             "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Lowers Price Target to $200",
             "💔 AAPL · Goldman Sachs · Buy · Target ↓ $200",
             0xD42020,
+            "Analyst Wire · Goldman Sachs",
         ),
         (
             "NSC",
             "RBC Capital Maintains Sector Perform on Norfolk Southern, Raises Price Target to $350.25",
             "💚 NSC · RBC Capital · Sector Perform · Target ↑ $350.25",
             0x4CAF50,
+            "Analyst Wire · RBC Capital",
         ),
         (
             "AAPL",
             "Goldman Sachs Maintains Buy on Apple, Confirms positive outlook",
             "❓ AAPL · Goldman Sachs · Buy",
             0,
+            "Analyst Wire · Goldman Sachs",
         ),
         (
             "AMZN",
             "JPMorgan Downgrades Amazon with Neutral Rating, Lowers Price Target to $135",
             "💔 AMZN · JPMorgan · Downgraded to Neutral · Target ↓ $135",
             0xD42020,
+            "Analyst Wire · JPMorgan",
         ),
         (
             "AAPL",
             "Baird Upgrades Apple to Outperform, Confirms positive outlook",
             "💚 AAPL · Baird · Upgraded to Outperform",
             0x4CAF50,
+            "Analyst Wire · Baird",
         ),
     ],
 )
@@ -133,6 +142,7 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
     headline: str,
     title: str,
     color: int,
+    username: str,
 ) -> None:
     """Format analyst targets, colors, and fallback titles in webhook embeds."""
     payload = analyst_payload(symbol, headline, STOCK_LOGO, TRANSPARENT_PNG)
@@ -146,7 +156,8 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
                 },
                 "color": color,
             }
-        ]
+        ],
+        "username": username,
     }
     assert payload == expected
 
@@ -163,6 +174,43 @@ def test_analyst_payload_formats_target_action_and_unknown_fallback(
 
     asyncio.run(send())
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("headline", "expected_username"),
+    [
+        (
+            "Headline without a recognized analyst format",
+            "Analyst Wire",
+        ),
+        (
+            "  Goldman Sachs   Upgrades Example Corp to Buy, Raises Price Target to $100",
+            "Analyst Wire · Goldman Sachs",
+        ),
+    ],
+)
+def test_analyst_payload_sets_wire_username_for_firm_or_fallback(
+    headline: str,
+    expected_username: str,
+) -> None:
+    """Use a clean analyst firm in the webhook username, with a fallback otherwise."""
+    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert payload["username"] == expected_username
+
+
+@pytest.mark.parametrize("firm_length", [65, 66])
+def test_analyst_payload_caps_username_at_discord_limit(firm_length: int) -> None:
+    """Keep analyst usernames at 80 characters when the firm reaches or exceeds the limit."""
+    firm = "F" * firm_length
+    headline = f"{firm} Upgrades Example Corp to Buy, Raises Price Target to $100"
+
+    payload = analyst_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert payload["username"] == f"Analyst Wire · {firm}"[:USERNAME_LIMIT]
+    assert len(payload["username"]) == USERNAME_LIMIT
 
 
 @pytest.mark.parametrize(
@@ -295,7 +343,8 @@ def test_analyst_payload_uses_report_details_without_symbol() -> None:
                 "author": {"name": "💔 Amazon · JPMorgan · Downgraded to Neutral · Target ↓ $135"},
                 "color": 0xD42020,
             }
-        ]
+        ],
+        "username": "Analyst Wire · JPMorgan",
     }
 
 
@@ -379,6 +428,7 @@ def test_news_payload_uses_headline_only_with_first_symbol_and_optional_url() ->
             }
         ]
     }
+    assert "username" not in payload
 
     no_optional_fields = NewsItem(
         symbols=("AAPL",),

@@ -21,6 +21,7 @@ _HTTP_SUCCESS_STATUS_MIN = 200
 _HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE = 300
 _WEBHOOK_DEADLINE_SECONDS = 10.0
 _AUTHOR_NAME_LIMIT = 256
+_USERNAME_LIMIT = 80
 
 
 class EmbedImage(TypedDict):
@@ -52,6 +53,7 @@ class WebhookPayload(TypedDict):
     """JSON body accepted by a Discord webhook."""
 
     embeds: list[Embed]
+    username: NotRequired[str]
 
 
 def earnings_payload(
@@ -79,6 +81,8 @@ def analyst_payload(
 ) -> WebhookPayload | None:
     """Build an analyst embed, keeping rating changes even without a target."""
     report = parse_analyst(headline)
+    firm = report.firm.strip()
+    username = f"Analyst Wire · {firm}" if firm else "Analyst Wire"
     action = report.price_target_action
     rating_action = report.action.casefold()
     is_rating_change = rating_action in {"upgrades", "downgrades"}
@@ -112,7 +116,7 @@ def analyst_payload(
     if was_truncated and headline:
         embed["description"] = headline
     embed["color"] = color
-    return {"embeds": [embed]}
+    return {"username": username[:_USERNAME_LIMIT], "embeds": [embed]}
 
 
 def _analyst_author_name(report: AnalystReport, symbol: str, emoji: str) -> str:
