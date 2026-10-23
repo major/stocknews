@@ -145,6 +145,7 @@ def test_analyst_payload_formats_description_and_color(
             {
                 "title": symbol,
                 "description": description,
+                "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": STOCK_LOGO.replace("%s", symbol.lower())},
                 "color": color,
             }
@@ -168,6 +169,7 @@ def test_analyst_payload_uses_company_name_and_stable_username() -> None:
             {
                 "title": "ARGX · argenx",
                 "description": "Target lowered to $1,120 · Buy maintained · Guggenheim",
+                "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": "https://static.stocktitan.net/company-logo/argx.webp"},
                 "color": 0xD42020,
             }
@@ -220,7 +222,7 @@ def test_analyst_payload_keeps_rating_changes_without_positive_target(
     assert embed["color"] == color
     assert embed["thumbnail"] == {"url": STOCK_LOGO.replace("%s", symbol.lower())}
     assert "author" not in embed
-    assert "image" not in embed
+    assert embed["image"] == {"url": TRANSPARENT_PNG}
 
 
 @pytest.mark.parametrize(
@@ -267,7 +269,7 @@ def test_rating_direction_takes_priority_over_target_direction(
     assert embed["color"] == color
     assert embed["thumbnail"] == {"url": STOCK_LOGO.replace("%s", "ex")}
     assert "author" not in embed
-    assert "image" not in embed
+    assert embed["image"] == {"url": TRANSPARENT_PNG}
 
 
 @pytest.mark.parametrize(
@@ -302,6 +304,7 @@ def test_analyst_payload_uses_report_stock_without_symbol() -> None:
             {
                 "title": "Amazon",
                 "description": "Target lowered to $135 · Downgraded to Neutral · JPMorgan",
+                "image": {"url": TRANSPARENT_PNG},
                 "color": 0xD42020,
             }
         ],

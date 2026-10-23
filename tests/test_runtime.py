@@ -350,6 +350,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                     {
                         "title": "AAPL · Apple",
                         "color": 0x4CAF50,
+                        "image": {"url": _TRANSPARENT_PNG},
                         "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                         "description": "Target raised to $223 · Buy maintained · Goldman Sachs",
                     }
@@ -855,7 +856,7 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
                 assert embed["thumbnail"]["url"] == _STOCK_LOGO.replace("%s", ticker.lower())
             else:
                 assert "thumbnail" not in embed
-            assert "image" not in embed
+            assert embed["image"] == {"url": _TRANSPARENT_PNG}
             visible_title = embed["title"]
         else:
             assert embed["title"] == title
