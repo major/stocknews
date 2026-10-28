@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict
 import httpx2
 
 from stocknews.analyst import parse_analyst
+from stocknews.earnings import analyze_earnings, describe_earnings
 from stocknews.earnings import company_name as earnings_company_name
-from stocknews.earnings import describe_earnings
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -59,14 +59,17 @@ def earnings_payload(
     company_name: str | None = None,
 ) -> WebhookPayload | None:
     """Build an earnings payload, or return None when no earnings data exists."""
-    description = describe_earnings(headline)
+    analysis = analyze_earnings(headline)
+    if analysis.kind in {"guidance_only", "other"}:
+        return None
+    description = analysis.text if analysis.kind == "headline" else describe_earnings(headline)
     if not description:
         return None
 
-    name = company_name.strip() if company_name and company_name.strip() else earnings_company_name(headline)
-    title = f"{symbol}: {name}" if symbol else name or headline
-    embed = _new_embed(title, stock_logo, symbol, transparent_png)
-    embed["description"] = description
+    name = company_name.strip() if company_name and company_name.strip() else earnings_company_name(analysis.text)
+    title = f"{symbol}: {name}" if symbol else name or analysis.text
+    embed = _new_embed(_limit_embed_text(title, _TITLE_LIMIT), stock_logo, symbol, transparent_png)
+    embed["description"] = _limit_embed_text(description, _DESCRIPTION_LIMIT)
     return {"embeds": [embed]}
 
 

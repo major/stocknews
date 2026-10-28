@@ -8,6 +8,7 @@ import json
 import logging
 from contextlib import contextmanager
 from dataclasses import replace
+from http import HTTPStatus
 from io import StringIO
 from typing import TYPE_CHECKING, Any
 
@@ -1509,8 +1510,6 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
 @pytest.mark.parametrize(
     ("headline", "kind"),
     [
-        ("Apple Q1 EPS ~$(0.10) miss $0.20 Estimate", "earnings"),
-        ("Apple Q1 EPS $-0.10 miss $0.20 Estimate", "earnings"),
         (
             "Piper Sandler Initiates Coverage on Nvidia to Overweight, Announces Price Target to $850",
             "analyst",
@@ -1518,8 +1517,6 @@ def test_stream_cleanup_error_does_not_hide_established_stream_failure(caplog: p
         ("Goldman Sachs Maintains Buy on Apple, Maintains Price Target at $223", "analyst"),
     ],
     ids=[
-        "unparseable-approximate-earnings",
-        "negative-earnings",
         "announced-analyst-target",
         "maintained-analyst-target",
     ],
@@ -1550,6 +1547,143 @@ def test_classified_news_without_payload_is_logged_and_not_delivered(headline: s
         assert len(skipped) == 1
         assert skipped[0]["reason"] == "no_payload"
         assert skipped[0]["kind"] == kind
+
+    asyncio.run(scenario())
+
+
+async def _run_earnings_headlines(
+    headlines: tuple[str, ...], *, asset_status: int = 200
+) -> tuple[list[tuple[str, str]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run real routing and payload builders with only HTTP responses mocked."""
+    requests: list[tuple[str, str]] = []
+    payloads: list[dict[str, Any]] = []
+    output = StringIO()
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        """Record asset and Discord requests and return the configured result."""
+        requests.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx2.Response(asset_status, json={"name": "TE Connectivity Ltd"})
+        payloads.append(json.loads(request.content))
+        return httpx2.Response(204)
+
+    async def connect_news() -> AsyncIterable[NewsItem]:
+        """Stream distinct test headlines through the real runtime."""
+
+        async def events() -> AsyncIterable[NewsItem]:
+            """Yield each test item for the same ticker."""
+            for headline in headlines:
+                yield NewsItem(symbols=("TEL",), author="Benzinga Newsdesk", headline=headline)
+
+        return events()
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+        await run(_config(), client, _logger(output), connect_news)
+    records = [json.loads(line) for line in output.getvalue().splitlines()]
+    return requests, payloads, records
+
+
+def test_guidance_only_skips_delivery_and_asset_lookup() -> None:
+    """Guidance is skipped even with general news enabled; actuals go to earnings."""
+
+    async def scenario() -> None:
+        """Check both skipped forecasts and a separate actual result."""
+        # Captured from stocknews logs on October 26 to 28, 2026.
+        forecasts = (
+            "TE Connectivity Sees Q1 GAAP EPS $3.04 vs $2.81 Est",
+            "TE Connectivity Sees Q1 Adj EPS $3.30 vs $3.01 Est; Sees Sales $5.350B vs $5.131B Est",
+        )
+        actual = "TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate"
+        requests, payloads, records = await _run_earnings_headlines(forecasts)
+
+        assert requests == []
+        assert payloads == []
+        skips = [record for record in records if record["msg"] == "skipping news item"]
+        assert [(record["headline"], record["reason"]) for record in skips] == [
+            (forecast, "guidance_only") for forecast in forecasts
+        ]
+        requests, payloads, _ = await _run_earnings_headlines((actual,))
+        assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
+        assert len(payloads) == 1
+        assert payloads[0]["embeds"][0]["description"] == actual
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("asset_status", [200, 503], ids=["asset-name", "lookup-failure"])
+@pytest.mark.parametrize("guidance_first", [False, True], ids=["actual-first", "guidance-first"])
+def test_mixed_earnings_keep_only_safe_actual_after_name_lookup(asset_status: int, guidance_first: bool) -> None:
+    """Exclude forecast values from both initial and name-overridden payloads."""
+
+    async def scenario() -> None:
+        """Deliver one mixed headline with either result from the asset API."""
+        # Constructed mixed headline; this is not an observed news item.
+        actual = "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate"
+        guidance = "TE Connectivity Sees Q1 EPS $9.99 vs $9.88 Estimate"
+        headline = f"{guidance}; {actual}" if guidance_first else f"{actual}; {guidance}"
+        requests, payloads, _ = await _run_earnings_headlines((headline,), asset_status=asset_status)
+
+        assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
+        assert len(payloads) == 1
+        assert "$2.10" in payloads[0]["embeds"][0]["description"]
+        assert "$9.99" not in json.dumps(payloads[0])
+        assert "$9.88" not in json.dumps(payloads[0])
+        if asset_status == HTTPStatus.OK:
+            assert payloads[0]["embeds"][0]["title"] == "TEL: TE Connectivity Ltd"
+
+    asyncio.run(scenario())
+
+
+def test_ambiguous_mixed_earnings_preserves_original_headline() -> None:
+    """Keep the full headline when actual and forecast cannot be safely separated."""
+
+    async def scenario() -> None:
+        """Confirm the literal original survives a successful name override."""
+        # Constructed ambiguity; this is not an observed news item.
+        headline = "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate and Sees Q1 EPS $9.99"
+        requests, payloads, _ = await _run_earnings_headlines((headline,))
+        assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
+        assert payloads[0]["embeds"][0]["description"] == headline
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        # Captured from stocknews logs on October 26 to 28, 2026.
+        "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
+        "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
+        "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+        "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
+        # Constructed edge cases.
+        "Apple Q1 EPS ~$(0.10) miss $0.20 Estimate",
+        "Apple Q1 EPS $-0.10 miss $0.20 Estimate",
+        "Apple Q1 EPS $2.10 up from $1.80 YoY",
+        "Apple Q1 Revenue $4.1B vs $4B Estimate",
+        "Apple Q1 EPS $2.10",
+    ],
+    ids=[
+        "stellantis",
+        "acumen",
+        "baldwin",
+        "scienjoy",
+        "approximate-negative",
+        "negative",
+        "year-over-year",
+        "revenue",
+        "no-estimate",
+    ],
+)
+def test_actual_earnings_with_literal_fallback_are_delivered(headline: str) -> None:
+    """Deliver actual results that cannot use the structured comparison formatter."""
+
+    async def scenario() -> None:
+        """Verify the original actual headline is present in the earnings payload."""
+        requests, payloads, records = await _run_earnings_headlines((headline,))
+        assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
+        assert payloads[0]["embeds"][0]["description"] == headline
+        assert not [record for record in records if record["msg"] == "skipping news item"]
 
     asyncio.run(scenario())
 

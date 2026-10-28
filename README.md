@@ -21,7 +21,7 @@ service.
 | `DISCORD_ANALYST_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for analyst ratings |
 | `DISCORD_ANALYST_ENABLED` | No | `true` | Enable analyst rating and price-target alerts |
 | `DISCORD_EARNINGS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for earnings |
-| `DISCORD_EARNINGS_ENABLED` | No | `true` | Enable earnings alerts for EPS and sales actuals versus estimates |
+| `DISCORD_EARNINGS_ENABLED` | No | `true` | Enable earnings alerts for reported financial results |
 | `DISCORD_NEWS_WEBHOOKS` | No | Empty | Comma-separated Discord webhook URLs for general news |
 | `DISCORD_NEWS_ENABLED` | No | `true` | Enable general news headline alerts with optional summary and link |
 | `STOCK_LOGO` | No | `https://static.stocktitan.net/company-logo/%s.webp` | Stock logo URL template (`%s` = ticker) |
@@ -51,18 +51,27 @@ DISCORD_NEWS_ENABLED=on
 ```
 
 Disabling a category skips it before payload creation and enqueueing. It does
-not route those items to general news. Earnings alerts compare EPS and sales
-actuals with estimates. Analyst alerts cover ratings and price targets, except
-announced or maintained price targets are suppressed. General news includes a
-headline and may include a summary and link. All categories filter for
+not route those items to general news. Earnings alerts retain reported financial
+results, including recognized year-over-year comparisons, preliminary results,
+and results without estimates. Confidently recognized guidance-only headlines
+are skipped entirely, not sent to general news. Mixed headlines keep only actual
+results when their guidance clauses can be safely separated. Otherwise, the
+original headline is sent rather than risking the loss of actual results. This
+conservative fallback can include guidance when its meaning is uncertain.
+Simple beat/miss comparisons use compact EPS and sales descriptions; complex
+results retain headline text so periods and accounting bases are not lost.
+Headline recognition is not a guarantee that every earnings report is covered.
+Analyst alerts cover ratings and price targets, except announced or maintained
+price targets are suppressed. General news includes a headline and may include
+a summary and link. All categories filter for
 Benzinga Newsdesk items. Symbols are trimmed, and blank or colon-qualified
 symbols are removed. Items with no symbols are allowed; items with only
 colon-qualified symbols are skipped. Mixed lists keep their US-style tickers.
 This colon-based check does not verify exchange listings. Embeds use the first
 retained ticker, or no ticker prefix and a transparent thumbnail for tickerless
-news. Headlines are not blocked by phrase. Webhooks are still required to send
-alerts, and empty webhook lists send nothing. Setting changes take effect after
-restarting the service.
+news. General-news headlines are not blocked by phrase. Webhooks are still
+required to send alerts, and empty webhook lists send nothing. Setting changes
+take effect after restarting the service.
 
 Analyst alerts use a compact title with the stock ticker and Alpaca security
 name when available. The description contains the price target, rating, and

@@ -85,3 +85,45 @@ def test_news_unescapes_encoded_headline_characters_before_classifying() -> None
 def test_author_match_is_exact_and_case_sensitive(author: str) -> None:
     """Route only the exact Benzinga Newsdesk author name."""
     assert classify_news(_item(("AAPL",), author, "headline")) == "unapproved_author"
+
+
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        # Captured from stocknews logs on October 26 to 28, 2026.
+        ("TE Connectivity Sees Q1 GAAP EPS $3.04 vs $2.81 Est", "guidance_only"),
+        ("TE Connectivity Sees Q1 Adj EPS $3.30 vs $3.01 Est; Sees Sales $5.350B vs $5.131B Est", "guidance_only"),
+        ("TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate", "earnings"),
+        # Constructed case, HTML, and mixed-headline variants.
+        ("TE Connectivity sees q1 eps &#36;1.20 vs &#36;1.10 estimate", "guidance_only"),
+        ("TE Connectivity Q4 EPS &#36;2.10 beat &#36;2.00 Estimate", "earnings"),
+        (
+            "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate; Sees Q1 EPS $1.20 vs $1.10 Estimate",
+            "earnings",
+        ),
+        (
+            "TE Connectivity Sees Q1 EPS $1.20 vs $1.10 Estimate; Q4 EPS $2.10 beat $2.00 Estimate",
+            "earnings",
+        ),
+        ("TE Connectivity Sees Q1 EPS $1.20; Q4 EPS $2.10 on a comparable basis", "earnings"),
+    ],
+)
+def test_earnings_guidance_and_actual_classification(headline: str, expected: str) -> None:
+    """Skip guidance alone while keeping actual and uncertain mixed results deliverable."""
+    assert classify_news(_item(("TEL",), "Benzinga Newsdesk", headline)) == expected
+
+
+@pytest.mark.parametrize(
+    ("symbols", "author", "expected"),
+    [
+        (("TEL",), "Someone else", "unapproved_author"),
+        (("TSX:TEL",), "Someone else", "non_us_exchange"),
+        (("TSX:TEL",), "Benzinga Newsdesk", "non_us_exchange"),
+    ],
+)
+def test_guidance_keeps_symbol_and_author_rejection_precedence(
+    symbols: tuple[str, ...], author: str, expected: str
+) -> None:
+    """Apply the existing eligibility gates before earnings analysis."""
+    headline = "TE Connectivity Sees Q1 GAAP EPS $3.04 vs $2.81 Est"
+    assert classify_news(_item(symbols, author, headline)) == expected
