@@ -137,6 +137,11 @@ def test_captured_earnings_headlines(headline: str, kind: str) -> None:
             "vs $16.03 Est; Raises FY2026 Sales Guidance from $16.302B-$16.609B to $16.471B-$16.624B"
         ),
         "Conference call:\nCheesecake Factory Sees Q4 Sales $1.040B-$1.050B vs $1.036B Est",
+        # Captured Discord alert, 2026-10-28
+        (
+            "FedEx Raises FY2026 Adj EPS Guidance from $16.90-$18.10 to $18.00-$18.60 vs $17.85 Est; "
+            "Revenue Growth Outlook Rises To 12% From 11%"
+        ),
     ],
 )
 def test_captured_additional_guidance_is_suppressed(headline: str) -> None:
@@ -212,6 +217,7 @@ def test_reviewed_guidance_is_not_earnings(headline: str) -> None:
         "Acme Sees Q3 EPS $3.00 vs $2.90 Est; EPS $2.00 Beats $1.90 Estimate",
         "Acme Sees Q3 EPS $3.00 vs $2.90 Est; Unexpected update",
         "Acme Raises FY2026 EPS Guidance from $2 to $3; Unexpected update",
+        "Acme Raises FY2026 EPS Guidance from $2 to $3; Q4 Results Beat Outlook",
         "Acme Sees Sales $5B vs $4B Est",
         "Sees Q2 EPS $3.00 vs $2.50 Estimate",
         "Acme Reports Q2 EPS $2.00, Sees Q3 EPS $3.00 vs $2.90 Est",
@@ -243,6 +249,10 @@ def test_actuals_with_context_keep_original_headline(headline: str) -> None:
         ),
         ("CORRECTION: Acme Q1 EPS $2.00; FY2026 Revenue expected to be $5B", "CORRECTION: Acme Q1 EPS $2.00"),
         ("Acme Q4 EPS $2.00; Raises FY2026 EPS Guidance from $2.00 to $3.00", "Acme Q4 EPS $2.00"),
+        (
+            "Acme Q4 EPS $2.00; Sees Q1 EPS $3.00 vs $2.90 Est; Margin Outlook Improves",
+            "Acme Q4 EPS $2.00",
+        ),
     ],
 )
 def test_mixed_clauses_keep_self_contained_actuals(headline: str, expected: str) -> None:
