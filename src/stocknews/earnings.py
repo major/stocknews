@@ -56,6 +56,11 @@ _SIMPLE_RE = re.compile(rf"(?:{_SIMPLE_FIELD})(?:\s*[,;]\s*{_SIMPLE_FIELD})?", r
 _FORECAST_WORD_RE = re.compile(
     r"\b(?:sees|expects?|expected|forecast|guidance|raises|lowers|affirms|narrows)\b", re.IGNORECASE
 )
+_OUTLOOK_WORD_RE = re.compile(r"\b(?:outlook|guidance)\b", re.IGNORECASE)
+_RESULT_WORD_RE = re.compile(
+    r"\b(?:reports?|reported|results?|beats?|miss(?:es|ed)?|profits?|loss(?:es)?|earnings|income)\b",
+    re.IGNORECASE,
+)
 _EDITORIAL_PREFIX_RE = re.compile(r"^(?:correction|update|conference call):\s*", re.IGNORECASE)
 
 
@@ -83,6 +88,15 @@ def _guidance_clause(clause: str) -> bool:
         return False
     prefix = clause[: match.start()].strip()
     return not prefix or not _UNSAFE_PREFIX_RE.search(prefix)
+
+
+def _outlook_clause(clause: str) -> bool:
+    """Recognize free-form outlook text that accompanies reviewed guidance.
+
+    Callers apply this only after another clause matched reviewed guidance, so
+    a lone "outlook" mention never hides an otherwise unexplained headline.
+    """
+    return bool(_OUTLOOK_WORD_RE.search(clause)) and not _RESULT_WORD_RE.search(clause) and not _candidate(clause)
 
 
 def _candidate(clause: str) -> bool:
@@ -129,6 +143,10 @@ def analyze_earnings(headline: str) -> EarningsAnalysis:
         )
     ):
         guidance[0] = False
+    if any(guidance):
+        guidance = [
+            is_guidance or _outlook_clause(clause) for clause, is_guidance in zip(clauses, guidance, strict=True)
+        ]
     if all(guidance):
         return EarningsAnalysis("guidance_only")
 

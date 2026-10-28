@@ -215,7 +215,7 @@ def test_earnings_payload_strips_mixed_forecasts_from_title_and_description(
 
 def test_earnings_payload_keeps_unknown_mixed_headline() -> None:
     """Preserve a mixed headline when its clauses cannot be safely separated."""
-    headline = "Example Q1 EPS $2.00; Sees Q2 EPS $3.00; unusual commentary about Q2 outlook"
+    headline = "Example Q1 EPS $2.00; Sees Q2 EPS $3.00; unusual commentary about Q2 demand"
 
     payload = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
