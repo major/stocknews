@@ -4,7 +4,7 @@ from html import unescape
 from typing import TYPE_CHECKING, Literal
 
 from stocknews.analyst import parse_analyst
-from stocknews.earnings import is_earnings_news
+from stocknews.earnings import analyze_earnings
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 NewsClassification = Literal[
     "earnings",
+    "guidance_only",
     "analyst",
     "news",
     "non_us_exchange",
@@ -30,7 +31,10 @@ def classify_news(item: NewsItem) -> NewsClassification:
     if item.author != "Benzinga Newsdesk":
         return "unapproved_author"
 
-    if is_earnings_news(headline):
+    earnings = analyze_earnings(headline)
+    if earnings.kind == "guidance_only":
+        return "guidance_only"
+    if earnings.kind in {"structured", "headline"}:
         return "earnings"
     parsed = parse_analyst(headline)
     if parsed.action and parsed.stock:

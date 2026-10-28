@@ -141,6 +141,115 @@ def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
     assert payload["embeds"][0]["thumbnail"] == {"url": TRANSPARENT_PNG}
 
 
+@pytest.mark.parametrize("company_name", [None, "  TE Connectivity  "])
+@pytest.mark.parametrize(
+    "headline",
+    [
+        # Captured stocknews logs, October 26-28, 2026.
+        "TE Connectivity Sees Q1 GAAP EPS $3.04 vs $2.81 Est",
+        "TE Connectivity Sees Q1 Adj EPS $3.30 vs $3.01 Est; Sees Sales $5.350B vs $5.131B Est",
+    ],
+)
+def test_earnings_payload_suppresses_forecasts(headline: str, company_name: str | None) -> None:
+    """Suppress forecast-only headlines even with a company override."""
+    payload = earnings_payload("TEL", headline, STOCK_LOGO, TRANSPARENT_PNG, company_name)
+
+    assert payload is None
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        # Captured stocknews logs, October 26-28, 2026.
+        "TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate",
+        "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
+        "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
+        "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+        "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
+        # Synthetic examples cover additional representations.
+        "Example Q1 EPS $2.00 vs $1.80 Estimate",
+        "Example Q1 EPS -$0.20 miss -$0.10 Estimate",
+        "Example Q1 EPS ~$2.00 beat $1.80 Estimate",
+        "Example Q1 Sales $1B vs $900M Last Year",
+        "Example Q1 Revenue $1B beat $900M Estimate",
+        "Example Q1 EPS $2.00",
+    ],
+)
+def test_earnings_payload_preserves_complex_actual_headlines(headline: str) -> None:
+    """Show complex or neutral actual results literally instead of guessing a result."""
+    payload = earnings_payload("TEL", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert payload["embeds"][0]["description"] == headline
+
+
+@pytest.mark.parametrize("company_name", [None, "  Example Inc.  "])
+@pytest.mark.parametrize(
+    ("headline", "actual"),
+    [
+        (
+            "Example Q1 EPS $2.00 beat $1.80 Estimate; Sees Q2 EPS $3.00 vs $2.50 Estimate",
+            "Example Q1 EPS $2.00 beat $1.80 Estimate",
+        ),
+        (
+            "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate",
+            "Example Q1 EPS $2.00 beat $1.80 Estimate",
+        ),
+    ],
+)
+def test_earnings_payload_strips_mixed_forecasts_from_title_and_description(
+    headline: str,
+    actual: str,
+    company_name: str | None,
+) -> None:
+    """Keep the retained actual clause literal when rebuilding with an asset name."""
+    payload = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG, company_name)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert embed["description"] == actual
+    assert embed["title"] == ("EX: Example Inc." if company_name else "EX: Example")
+    assert "Sees" not in embed["title"]
+    assert "Sees" not in embed["description"]
+
+
+def test_earnings_payload_keeps_unknown_mixed_headline() -> None:
+    """Preserve a mixed headline when its clauses cannot be safely separated."""
+    headline = "Example Q1 EPS $2.00; Sees Q2 EPS $3.00; unusual commentary about Q2 outlook"
+
+    payload = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    assert payload["embeds"][0]["description"] == headline
+
+
+def test_earnings_payload_rebuild_changes_only_company_title() -> None:
+    """Keep safe description and media stable across company-name rebuilding."""
+    headline = "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate"
+
+    original = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
+    rebuilt = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG, "  Example Inc.  ")
+    rebuilt_again = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG, "  Example Inc.  ")
+
+    assert original is not None
+    assert rebuilt is not None
+    assert rebuilt == rebuilt_again
+    assert {**original["embeds"][0], "title": "EX: Example Inc."} == rebuilt["embeds"][0]
+    assert rebuilt["embeds"][0]["description"] == "Example Q1 EPS $2.00 beat $1.80 Estimate"
+
+
+def test_earnings_payload_limits_long_headline_fallback() -> None:
+    """Truncate fallback titles and descriptions at Discord's embed limits."""
+    headline = "Q1 EPS $2.00 " + " ".join(["additional context"] * 300)
+
+    payload = earnings_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is not None
+    embed = payload["embeds"][0]
+    assert embed["title"] == f"{headline[: TITLE_LIMIT - 1]}…"
+    assert embed["description"] == f"{headline[: DESCRIPTION_LIMIT - 1]}…"
+
+
 @pytest.mark.parametrize(
     ("symbol", "headline", "description", "color"),
     [
