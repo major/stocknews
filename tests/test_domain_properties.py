@@ -78,10 +78,11 @@ def test_earnings_extraction_keeps_last_generated_clause_per_field(
         kind: next(clause for clause in reversed(clauses) if clause[0] == kind) for kind in ("EPS", "Sales")
     }
     expected = {
-        kind: (actual, estimate, outcome == "beat") for kind, actual, outcome, estimate in last_clause_by_kind.values()
+        kind: (actual, estimate, "beat" if outcome == "beat" else "miss")
+        for kind, actual, outcome, estimate in last_clause_by_kind.values()
     }
 
     extracted = extract_earnings(headline)
-    actual = {kind: (result.actual, result.estimate, result.beat) for kind, result in extracted.items()}
+    actual = {kind: (result.actual, result.estimate, result.outcome) for kind, result in extracted.items()}
 
     assert actual == expected

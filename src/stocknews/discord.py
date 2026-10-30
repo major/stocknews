@@ -62,7 +62,7 @@ def earnings_payload(
     analysis = analyze_earnings(headline)
     if analysis.kind in {"guidance_only", "other"}:
         return None
-    description = analysis.text if analysis.kind == "headline" else describe_earnings(headline)
+    description = describe_earnings(headline)
     if not description:
         return None
 

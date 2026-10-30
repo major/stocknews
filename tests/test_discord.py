@@ -158,59 +158,68 @@ def test_earnings_payload_suppresses_forecasts(headline: str, company_name: str 
 
 
 @pytest.mark.parametrize(
-    "headline",
+    ("headline", "description"),
     [
         # Captured stocknews logs, October 26-28, 2026.
-        "TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate",
-        "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
-        "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
-        "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
-        "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
+        (
+            "TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate",
+            "💚 EPS: $3.14 vs. $3.07 est.\n💚 Sales: $5.312B vs. $5.282B est.",
+        ),
+        (
+            "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
+            "📊 EPS: $(0.01)\n📊 Sales: $43.285B",
+        ),
+        (
+            "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
+            "💚 EPS: $(0.35) vs. $(0.37) est.",
+        ),
+        (
+            "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+            "📊 Sales: $480.3M\nUp 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+        ),
+        (
+            "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
+            "📉 EPS: $0.05 vs. $0.08 YoY\n📉 Sales: $45.698M vs. $48.700M YoY",
+        ),
         # Synthetic examples cover additional representations.
-        "Example Q1 EPS $2.00 vs $1.80 Estimate",
-        "Example Q1 EPS -$0.20 miss -$0.10 Estimate",
-        "Example Q1 EPS ~$2.00 beat $1.80 Estimate",
-        "Example Q1 Sales $1B vs $900M Last Year",
-        "Example Q1 Revenue $1B beat $900M Estimate",
-        "Example Q1 EPS $2.00",
+        ("Example Q1 EPS $2.00 vs $1.80 Estimate", "⚖️ EPS: $2.00 vs. $1.80 est."),
+        ("Example Q1 EPS -$0.20 miss -$0.10 Estimate", "💔 EPS: -$0.20 vs. -$0.10 est."),
+        ("Example Q1 EPS ~$2.00 beat $1.80 Estimate", "💚 EPS: ~$2.00 vs. $1.80 est."),
+        ("Example Q1 Sales $1B vs $900M Last Year", "📊 Sales: $1B\nvs $900M Last Year"),
+        ("Example Q1 Revenue $1B beat $900M Estimate", "💚 Revenue: $1B vs. $900M est."),
+        ("Example Q1 EPS $2.00", "📊 EPS: $2.00"),
     ],
 )
-def test_earnings_payload_preserves_complex_actual_headlines(headline: str) -> None:
-    """Show complex or neutral actual results literally instead of guessing a result."""
+def test_earnings_payload_formats_complex_actual_headlines(headline: str, description: str) -> None:
+    """Format actual results as marker lines and keep the leftover context."""
     payload = earnings_payload("TEL", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
-    assert payload["embeds"][0]["description"] == headline
+    assert payload["embeds"][0]["description"] == description
 
 
 @pytest.mark.parametrize("company_name", [None, "  Example Inc.  "])
 @pytest.mark.parametrize(
-    ("headline", "actual"),
+    "headline",
     [
-        (
-            "Example Q1 EPS $2.00 beat $1.80 Estimate; Sees Q2 EPS $3.00 vs $2.50 Estimate",
-            "Example Q1 EPS $2.00 beat $1.80 Estimate",
-        ),
-        (
-            "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate",
-            "Example Q1 EPS $2.00 beat $1.80 Estimate",
-        ),
+        "Example Q1 EPS $2.00 beat $1.80 Estimate; Sees Q2 EPS $3.00 vs $2.50 Estimate",
+        "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate",
     ],
 )
 def test_earnings_payload_strips_mixed_forecasts_from_title_and_description(
     headline: str,
-    actual: str,
     company_name: str | None,
 ) -> None:
-    """Keep the retained actual clause literal when rebuilding with an asset name."""
+    """Keep the retained actual clause when rebuilding with an asset name."""
     payload = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG, company_name)
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert embed["description"] == actual
+    assert embed["description"] == "💚 EPS: $2.00 vs. $1.80 est."
     assert embed["title"] == ("EX: Example Inc." if company_name else "EX: Example")
     assert "Sees" not in embed["title"]
     assert "Sees" not in embed["description"]
+    assert "$3.00" not in embed["description"]
 
 
 def test_earnings_payload_keeps_unknown_mixed_headline() -> None:
@@ -220,7 +229,9 @@ def test_earnings_payload_keeps_unknown_mixed_headline() -> None:
     payload = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
-    assert payload["embeds"][0]["description"] == headline
+    assert payload["embeds"][0]["description"] == (
+        "📊 EPS: $2.00\nSees Q2 EPS $3.00\nunusual commentary about Q2 demand"
+    )
 
 
 def test_earnings_payload_rebuild_changes_only_company_title() -> None:
@@ -235,19 +246,21 @@ def test_earnings_payload_rebuild_changes_only_company_title() -> None:
     assert rebuilt is not None
     assert rebuilt == rebuilt_again
     assert {**original["embeds"][0], "title": "EX: Example Inc."} == rebuilt["embeds"][0]
-    assert rebuilt["embeds"][0]["description"] == "Example Q1 EPS $2.00 beat $1.80 Estimate"
+    assert rebuilt["embeds"][0]["description"] == "💚 EPS: $2.00 vs. $1.80 est."
 
 
 def test_earnings_payload_limits_long_headline_fallback() -> None:
     """Truncate fallback titles and descriptions at Discord's embed limits."""
     headline = "Q1 EPS $2.00 " + " ".join(["additional context"] * 300)
+    description = "📊 EPS: $2.00\n" + " ".join(["additional context"] * 300)
 
     payload = earnings_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
     embed = payload["embeds"][0]
     assert embed["title"] == f"{headline[: TITLE_LIMIT - 1]}…"
-    assert embed["description"] == f"{headline[: DESCRIPTION_LIMIT - 1]}…"
+    assert embed["description"] == f"{description[: DESCRIPTION_LIMIT - 1]}…"
+    assert len(embed["description"]) == DESCRIPTION_LIMIT
 
 
 @pytest.mark.parametrize(
