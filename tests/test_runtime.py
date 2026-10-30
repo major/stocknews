@@ -1605,7 +1605,9 @@ def test_guidance_only_skips_delivery_and_asset_lookup() -> None:
         requests, payloads, _ = await _run_earnings_headlines((actual,))
         assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
         assert len(payloads) == 1
-        assert payloads[0]["embeds"][0]["description"] == actual
+        assert payloads[0]["embeds"][0]["description"] == (
+            "💚 EPS: $3.14 vs. $3.07 est.\n💚 Sales: $5.312B vs. $5.282B est."
+        )
 
     asyncio.run(scenario())
 
@@ -1643,25 +1645,37 @@ def test_ambiguous_mixed_earnings_preserves_original_headline() -> None:
         headline = "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate and Sees Q1 EPS $9.99"
         requests, payloads, _ = await _run_earnings_headlines((headline,))
         assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
-        assert payloads[0]["embeds"][0]["description"] == headline
+        assert payloads[0]["embeds"][0]["description"] == "💚 EPS: $2.10 vs. $2.00 est.\nand Sees Q1 EPS $9.99"
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
-    "headline",
+    ("headline", "description"),
     [
         # Captured from stocknews logs on October 26 to 28, 2026.
-        "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
-        "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
-        "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
-        "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
+        (
+            "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
+            "📊 EPS: $(0.01)\n📊 Sales: $43.285B",
+        ),
+        (
+            "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
+            "💚 EPS: $(0.35) vs. $(0.37) est.",
+        ),
+        (
+            "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+            "📊 Sales: $480.3M\nUp 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+        ),
+        (
+            "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
+            "📉 EPS: $0.05 vs. $0.08 YoY\n📉 Sales: $45.698M vs. $48.700M YoY",
+        ),
         # Constructed edge cases.
-        "Apple Q1 EPS ~$(0.10) miss $0.20 Estimate",
-        "Apple Q1 EPS $-0.10 miss $0.20 Estimate",
-        "Apple Q1 EPS $2.10 up from $1.80 YoY",
-        "Apple Q1 Revenue $4.1B vs $4B Estimate",
-        "Apple Q1 EPS $2.10",
+        ("Apple Q1 EPS ~$(0.10) miss $0.20 Estimate", "💔 EPS: ~$(0.10) vs. $0.20 est."),
+        ("Apple Q1 EPS $-0.10 miss $0.20 Estimate", "💔 EPS: $-0.10 vs. $0.20 est."),
+        ("Apple Q1 EPS $2.10 up from $1.80 YoY", "📈 EPS: $2.10 vs. $1.80 YoY"),
+        ("Apple Q1 Revenue $4.1B vs $4B Estimate", "⚖️ Revenue: $4.1B vs. $4B est."),
+        ("Apple Q1 EPS $2.10", "📊 EPS: $2.10"),
     ],
     ids=[
         "stellantis",
@@ -1675,14 +1689,14 @@ def test_ambiguous_mixed_earnings_preserves_original_headline() -> None:
         "no-estimate",
     ],
 )
-def test_actual_earnings_with_literal_fallback_are_delivered(headline: str) -> None:
-    """Deliver actual results that cannot use the structured comparison formatter."""
+def test_actual_earnings_with_literal_fallback_are_formatted(headline: str, description: str) -> None:
+    """Deliver actual results formatted as marker lines with the leftover context."""
 
     async def scenario() -> None:
-        """Verify the original actual headline is present in the earnings payload."""
+        """Verify the formatted actual description is present in the earnings payload."""
         requests, payloads, records = await _run_earnings_headlines((headline,))
         assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
-        assert payloads[0]["embeds"][0]["description"] == headline
+        assert payloads[0]["embeds"][0]["description"] == description
         assert not [record for record in records if record["msg"] == "skipping news item"]
 
     asyncio.run(scenario())

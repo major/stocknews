@@ -3,15 +3,40 @@
 import re
 from dataclasses import dataclass
 from html import unescape
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+_EARNINGS_METRIC = r"Normalized\s+FFO|AFFO|FFO|EPS|Sales|Revenue"
+_EARNINGS_AMOUNT = r"[\d\.()$KMBT~\-]+"
+# Matched metric words are normalized to these canonical field keys.
+_METRIC_KINDS = {
+    "eps": "EPS",
+    "sales": "Sales",
+    "revenue": "Revenue",
+    "ffo": "FFO",
+    "affo": "AFFO",
+    "normalized ffo": "Normalized FFO",
+}
 
 _EARNINGS_DATA_RE = re.compile(
-    r"(EPS|Sales) ([\d\.()$KMBT]+) (\w+) ([\d\.()$KMBT]+)(?: Est(?:imate|\.)?)?",
+    rf"\b(?P<metric>{_EARNINGS_METRIC})\b\s+(?:of\s+)?(?P<actual>{_EARNINGS_AMOUNT})"
+    rf"(?:\s*[,;]?\s+(?:"
+    rf"(?P<result>Beats?|Miss(?:es|ed)?)\s+(?P<result_estimate>{_EARNINGS_AMOUNT})(?:\s+Est(?:imate)?\.?)?"
+    rf"|(?P<direction>Up|Down)\s+From\s+(?P<prior>{_EARNINGS_AMOUNT})"
+    rf"(?:\s+(?P<prior_basis>YoY|Y/Y|Est(?:imate)?\.?))?"
+    rf"|vs\.?\s+(?P<compared>{_EARNINGS_AMOUNT})\s+Est(?:imate)?\.?"
+    rf"|(?P<inline>Inline)"
+    rf"))?",
     re.IGNORECASE | re.ASCII,
 )
-_COMPANY_RE = re.compile(r"^(.*?) Q[1-4]")
 _PERIOD = r"(?:Q[1-4](?:\s+20\d{2})?|FY(?:20\d{2})?|(?:20\d{2}\s+)?(?:First|Second|Third|Fourth) Quarter)"
 _BASIS = r"(?:GAAP|Adj\.?|Adjusted|non-GAAP)"
+# A clause prefix naming the company, period, and accounting basis is context
+# the embed title already carries, so the formatter drops it from leftovers.
+_CONTEXT_PREFIX_RE = re.compile(rf"^[^;]*?{_PERIOD}(?:\s+{_BASIS})?\s+", re.IGNORECASE)
+_COMPANY_RE = re.compile(r"^(.*?) Q[1-4]")
 _AMOUNT = r"~?-?(?:[A-Z]{1,3})?\$(?:\(?-?\d+(?:\.\d+)?\)?)[KMBT]?"
 _RANGE = rf"{_AMOUNT}(?:\s*[-\u2013]\s*{_AMOUNT})?"
 _METRIC = r"(?:EPS|Sales|Revenue)"
@@ -61,7 +86,7 @@ _RESULT_WORD_RE = re.compile(
     r"\b(?:reports?|reported|results?|beats?|miss(?:es|ed)?|profits?|loss(?:es)?|earnings|income)\b",
     re.IGNORECASE,
 )
-_EDITORIAL_PREFIX_RE = re.compile(r"^(?:correction|update|conference call):\s*", re.IGNORECASE)
+_EDITORIAL_PREFIX_RE = re.compile(r"^(?:correction|update|conference call|reported earlier)\s*[:,]\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,13 +97,30 @@ class EarningsAnalysis:
     text: str = ""
 
 
+Outcome = Literal["beat", "miss", "inline", "up", "down", "vs", "bare"]
+# The direction group only matches Up or Down, narrowed here for type checkers.
+_DIRECTION_OUTCOMES: dict[str, Outcome] = {"up": "up", "down": "down"}
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class EarningsResult:
-    """Actual and estimated values for one earnings field."""
+    """Actual result and optional comparison for one earnings metric."""
 
     actual: str
-    estimate: str
-    beat: bool
+    estimate: str = ""
+    outcome: Outcome = "bare"
+    yoy: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _FieldMatch:
+    """One extracted metric comparison and its span inside the source text."""
+
+    kind: str
+    result: EarningsResult
+    start: int
+    end: int
+    confident: bool = True
 
 
 def _guidance_clause(clause: str) -> bool:
@@ -174,41 +216,140 @@ def is_earnings_news(headline: str) -> bool:
 
 
 def extract_earnings(headline: str) -> dict[str, EarningsResult]:
-    """Extract EPS and Sales values, keeping the last match for each field."""
+    """Extract metric comparisons, keeping the last match for each field."""
     results: dict[str, EarningsResult] = {}
-    for match in _EARNINGS_DATA_RE.finditer(headline):
-        kind = "Sales" if match.group(1).upper() == "SALES" else "EPS"
-        results[kind] = EarningsResult(
-            actual=match.group(2),
-            estimate=match.group(4),
-            beat=parse_result(match.group(3)),
-        )
+    for field in _field_matches(headline):
+        results[field.kind] = field.result
     return results
 
 
-def parse_result(raw: str) -> bool:
-    """Return whether the result text indicates that the company beat estimates."""
-    return "beat" in raw.lower()
+def _field_matches(text: str) -> list[_FieldMatch]:
+    """List metric comparisons in text order, keeping raw matched spans."""
+    return [
+        _FieldMatch(
+            kind=_METRIC_KINDS[" ".join(match.group("metric").lower().split())],
+            result=_field_result(match),
+            start=match.start(),
+            end=match.end(),
+        )
+        for match in _EARNINGS_DATA_RE.finditer(text)
+    ]
+
+
+def _field_result(match: re.Match[str]) -> EarningsResult:
+    """Classify one regex match into the outcome it describes."""
+    if match.group("result"):
+        word = match.group("result").lower()
+        return EarningsResult(
+            actual=match.group("actual"),
+            estimate=match.group("result_estimate"),
+            outcome="beat" if "beat" in word else "miss",
+        )
+    if match.group("direction"):
+        prior_basis = (match.group("prior_basis") or "").lower()
+        return EarningsResult(
+            actual=match.group("actual"),
+            estimate=match.group("prior"),
+            outcome=_DIRECTION_OUTCOMES[match.group("direction").lower()],
+            yoy=prior_basis.startswith("y"),
+        )
+    if match.group("compared"):
+        return EarningsResult(actual=match.group("actual"), estimate=match.group("compared"), outcome="vs")
+    if match.group("inline"):
+        return EarningsResult(actual=match.group("actual"), outcome="inline")
+    return EarningsResult(actual=match.group("actual"))
+
+
+def _clause_fields(clause: str) -> list[_FieldMatch]:
+    """Flag matches that a forecast word introduces as guidance, not actuals."""
+    return [
+        _FieldMatch(
+            kind=field.kind,
+            result=field.result,
+            start=field.start,
+            end=field.end,
+            confident=not _FORECAST_WORD_RE.search(clause[: field.start]),
+        )
+        for field in _field_matches(clause)
+    ]
+
+
+def outcome_emoji(outcome: Outcome) -> str:
+    """Return the display marker for one comparison outcome."""
+    return {
+        "beat": "💚",
+        "miss": "💔",
+        "inline": "🎯",
+        "up": "📈",
+        "down": "📉",
+        "vs": "⚖️",
+        "bare": "📊",
+    }[outcome]
 
 
 def company_name(headline: str) -> str:
-    """Return the prefix before a Q1 through Q4 marker, if present."""
+    """Return the company prefix before a Q1 through Q4 marker, if present."""
     match = _COMPANY_RE.search(headline)
-    return match.group(1) if match else ""
-
-
-def beat_emoji(value: bool) -> str:
-    """Return the display marker for a beat or miss."""
-    return "💚" if value else "💔"
+    if not match:
+        return ""
+    return _EDITORIAL_PREFIX_RE.sub("", match.group(1), count=1).strip()
 
 
 def describe_earnings(headline: str) -> str:
-    """Format safe comparisons or preserve the original earnings headline."""
+    """Format parsed comparisons as marker lines, keeping leftover text intact."""
     analysis = analyze_earnings(headline)
-    if analysis.kind != "structured":
-        return analysis.text
-    lines = [
-        f"{beat_emoji(result.beat)} {kind}: {result.actual} vs. {result.estimate} est."
-        for kind, result in extract_earnings(analysis.text).items()
-    ]
-    return "\n".join(sorted(lines))
+    if analysis.kind not in {"structured", "headline"}:
+        return ""
+    return _describe_actuals(analysis.text)
+
+
+def _describe_actuals(text: str) -> str:
+    """Render confident comparisons as marker lines and keep remaining text."""
+    clause_fields = [(clause, _clause_fields(clause)) for clause in (c.strip() for c in text.split(";"))]
+    # Keep only the last confident match per field, mirroring extract_earnings.
+    displayed: dict[str, _FieldMatch] = {}
+    for _, fields in clause_fields:
+        for field in fields:
+            if field.confident:
+                displayed[field.kind] = field
+    if not displayed:
+        return text
+    lines = sorted(_result_line(displayed[kind]) for kind in displayed)
+    remainders: list[str] = []
+    for clause, fields in clause_fields:
+        shown = [field for field in fields if displayed.get(field.kind) is field]
+        if not shown:
+            remainders.append(clause)
+            continue
+        fragment = _remainder(clause, shown)
+        if fragment:
+            remainders.append(fragment)
+    return "\n".join([*lines, *remainders])
+
+
+def _result_line(field: _FieldMatch) -> str:
+    """Render one extracted field as a marker comparison line."""
+    result = field.result
+    if not result.estimate:
+        suffix = " inline" if result.outcome == "inline" else ""
+        return f"{outcome_emoji(result.outcome)} {field.kind}: {result.actual}{suffix}"
+    comparison = " YoY" if result.yoy else " est."
+    return f"{outcome_emoji(result.outcome)} {field.kind}: {result.actual} vs. {result.estimate}{comparison}"
+
+
+def _remainder(clause: str, shown: Sequence[_FieldMatch]) -> str:
+    """Drop displayed spans and the company, period, and basis prefix."""
+    fragment = _remove_spans(clause, [(field.start, field.end) for field in shown])
+    fragment = _CONTEXT_PREFIX_RE.sub("", fragment, count=1)
+    return re.sub(r"\s+", " ", fragment).strip().strip(" ,;:.")
+
+
+def _remove_spans(text: str, spans: Sequence[tuple[int, int]]) -> str:
+    """Remove matched spans from text, keeping everything else in order."""
+    parts: list[str] = []
+    cursor = 0
+    for start, end in sorted(spans):
+        parts.append(text[cursor:start])
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
