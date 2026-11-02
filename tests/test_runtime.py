@@ -291,7 +291,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
             NewsItem(
                 symbols=("AAPL",),
                 author="Benzinga Newsdesk",
-                headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+                headline="Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
             ),
             NewsItem(
                 symbols=("AAPL",),
@@ -339,7 +339,7 @@ def test_runtime_classifies_formats_and_sends_real_discord_payloads() -> None:
                 "embeds": [
                     {
                         "title": "AAPL: Apple",
-                        "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                        "description": "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est.",
                         "image": {"url": _TRANSPARENT_PNG},
                         "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                     }
@@ -387,7 +387,7 @@ def test_asset_name_lookup_is_shared_by_analyst_and_earnings_deliveries() -> Non
         earnings_item = NewsItem(
             symbols=("AAPL",),
             author="Benzinga Newsdesk",
-            headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+            headline="Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
         )
 
         async def handler(request: httpx2.Request) -> httpx2.Response:
@@ -430,7 +430,7 @@ def test_asset_name_lookup_is_shared_by_analyst_and_earnings_deliveries() -> Non
         earnings_embed = earnings_payload["embeds"][0]
         assert earnings_embed == {
             "title": "AAPL: Apple Inc.",
-            "description": "💚 EPS: $2.00 vs. $1.80 est.",
+            "description": "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est.",
             "image": {"url": _TRANSPARENT_PNG},
             "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
         }
@@ -503,7 +503,7 @@ def test_earnings_asset_lookup_failure_preserves_headline_name_and_delivery(fail
                 yield NewsItem(
                     symbols=("AAPL",),
                     author="Benzinga Newsdesk",
-                    headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+                    headline="Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
                 )
 
             return events()
@@ -517,7 +517,7 @@ def test_earnings_asset_lookup_failure_preserves_headline_name_and_delivery(fail
                 "embeds": [
                     {
                         "title": "AAPL: Apple",
-                        "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                        "description": "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est.",
                         "image": {"url": _TRANSPARENT_PNG},
                         "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
                     }
@@ -558,7 +558,7 @@ def test_runtime_skips_asset_lookup_when_delivery_is_not_eligible(case: str, exp
         earnings = NewsItem(
             symbols=("AAPL",),
             author="Benzinga Newsdesk",
-            headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+            headline="Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
         )
         items = {
             "suppressed": NewsItem(
@@ -830,10 +830,10 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
 @pytest.mark.parametrize(
     ("symbols", "headline", "route", "title", "ticker"),
     [
-        ((), "Apple Q1 EPS $2.00 beat $1.80 Estimate", "/earnings", "Apple", ""),
+        ((), "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate", "/earnings", "Apple", ""),
         (
             ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
-            "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+            "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
             "/earnings",
             "AAPL: Apple",
             "AAPL",
@@ -1620,14 +1620,14 @@ def test_mixed_earnings_keep_only_safe_actual_after_name_lookup(asset_status: in
     async def scenario() -> None:
         """Deliver one mixed headline with either result from the asset API."""
         # Constructed mixed headline; this is not an observed news item.
-        actual = "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate"
+        actual = "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate, Sales $4B beat $3B Estimate"
         guidance = "TE Connectivity Sees Q1 EPS $9.99 vs $9.88 Estimate"
         headline = f"{guidance}; {actual}" if guidance_first else f"{actual}; {guidance}"
         requests, payloads, _ = await _run_earnings_headlines((headline,), asset_status=asset_status)
 
         assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
         assert len(payloads) == 1
-        assert "$2.10" in payloads[0]["embeds"][0]["description"]
+        assert payloads[0]["embeds"][0]["description"] == ("💚 EPS: $2.10 vs. $2.00 est.\n💚 Sales: $4B vs. $3B est.")
         assert "$9.99" not in json.dumps(payloads[0])
         assert "$9.88" not in json.dumps(payloads[0])
         if asset_status == HTTPStatus.OK:
@@ -1636,68 +1636,33 @@ def test_mixed_earnings_keep_only_safe_actual_after_name_lookup(asset_status: in
     asyncio.run(scenario())
 
 
-def test_ambiguous_mixed_earnings_preserves_original_headline() -> None:
-    """Keep the full headline when actual and forecast cannot be safely separated."""
-
-    async def scenario() -> None:
-        """Confirm the literal original survives a successful name override."""
-        # Constructed ambiguity; this is not an observed news item.
-        headline = "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate and Sees Q1 EPS $9.99"
-        requests, payloads, _ = await _run_earnings_headlines((headline,))
-        assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
-        assert payloads[0]["embeds"][0]["description"] == "💚 EPS: $2.10 vs. $2.00 est.\nand Sees Q1 EPS $9.99"
-
-    asyncio.run(scenario())
-
-
 @pytest.mark.parametrize(
-    ("headline", "description"),
+    "headline",
     [
-        # Captured from stocknews logs on October 26 to 28, 2026.
-        (
-            "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
-            "📊 EPS: $(0.01)\n📊 Sales: $43.285B",
-        ),
-        (
-            "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
-            "💚 EPS: $(0.35) vs. $(0.37) est.",
-        ),
-        (
-            "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
-            "📊 Sales: $480.3M\nUp 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
-        ),
-        (
-            "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
-            "📉 EPS: $0.05 vs. $0.08 YoY\n📉 Sales: $45.698M vs. $48.700M YoY",
-        ),
-        # Constructed edge cases.
-        ("Apple Q1 EPS ~$(0.10) miss $0.20 Estimate", "💔 EPS: ~$(0.10) vs. $0.20 est."),
-        ("Apple Q1 EPS $-0.10 miss $0.20 Estimate", "💔 EPS: $-0.10 vs. $0.20 est."),
-        ("Apple Q1 EPS $2.10 up from $1.80 YoY", "📈 EPS: $2.10 vs. $1.80 YoY"),
-        ("Apple Q1 Revenue $4.1B vs $4B Estimate", "⚖️ Revenue: $4.1B vs. $4B est."),
-        ("Apple Q1 EPS $2.10", "📊 EPS: $2.10"),
-    ],
-    ids=[
-        "stellantis",
-        "acumen",
-        "baldwin",
-        "scienjoy",
-        "approximate-negative",
-        "negative",
-        "year-over-year",
-        "revenue",
-        "no-estimate",
+        "Apple Q4 Sales $57.183B iPhone Vs $49.025B Prior",
+        "Apple Q4 Sales $7.744B Mac Vs $7.614B Prior",
+        "Apple Q4 Sales $6.952B iPad Vs $6.443B Prior",
+        "Apple Q4 Sales $9.042B Wearables Vs $9.323B Prior",
+        "Apple Q1 EPS $2.10 beat $2.00 Estimate",
+        "Apple Q1 EPS $2.10 beat $2.00 Estimate, iPhone Sales $57B vs $49B Prior",
+        "Apple Q1 EPS $2.10, EPS $2.00, Sales $4B",
+        "Apple Q1 EPS $2.10, Sales $4B, EBITDA $1B",
+        "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate and Sees Q1 EPS $9.99",
+        "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
     ],
 )
-def test_actual_earnings_with_literal_fallback_are_formatted(headline: str, description: str) -> None:
-    """Deliver actual results formatted as marker lines with the leftover context."""
+def test_incomplete_earnings_skip_without_general_news_fallback(headline: str) -> None:
+    """Skip incomplete and ambiguous financial headlines before any HTTP request."""
 
     async def scenario() -> None:
-        """Verify the formatted actual description is present in the earnings payload."""
+        """Check real routing with general news enabled."""
         requests, payloads, records = await _run_earnings_headlines((headline,))
-        assert requests == [("GET", "/v2/assets/TEL"), ("POST", "/earnings")]
-        assert payloads[0]["embeds"][0]["description"] == description
-        assert not [record for record in records if record["msg"] == "skipping news item"]
+
+        assert requests == []
+        assert payloads == []
+        skips = [record for record in records if record["msg"] == "skipping news item"]
+        assert len(skips) == 1
+        assert skips[0]["reason"] == "incomplete_earnings"
 
     asyncio.run(scenario())
 
@@ -1736,7 +1701,7 @@ def test_disabled_categories_are_skipped_without_fallback(
             NewsItem(
                 symbols=("AAPL",),
                 author="Benzinga Newsdesk",
-                headline="Apple Q1 EPS $2.00 beat $1.80 Estimate",
+                headline="Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
             ),
             NewsItem(
                 symbols=("AAPL",),
@@ -1775,7 +1740,7 @@ def test_disabled_categories_are_skipped_without_fallback(
         sent = [record for record in records if record["msg"] == "sent Discord webhook"]
         skip_details = {
             "earnings": {
-                "headline": "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+                "headline": "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
                 "symbols": ["AAPL"],
             },
             "analyst": {

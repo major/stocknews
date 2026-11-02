@@ -124,7 +124,7 @@ def test_rest_startup_routes_real_polls_and_deduplicates_across_restart(  # noqa
         if request_number == 1:
             return _response(
                 [
-                    _article(1, "Apple Q1 EPS $2.00 beat $1.80 Estimate"),
+                    _article(1, "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate"),
                     _article(2, "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223"),
                 ],
                 "page-2",

@@ -51,15 +51,12 @@ DISCORD_NEWS_ENABLED=on
 ```
 
 Disabling a category skips it before payload creation and enqueueing. It does
-not route those items to general news. Earnings alerts retain reported financial
-results, including recognized year-over-year comparisons, preliminary results,
-and results without estimates. Confidently recognized guidance-only headlines
-are skipped entirely, not sent to general news. Mixed headlines keep only actual
-results when their guidance clauses can be safely separated. Otherwise, the
-original headline is sent rather than risking the loss of actual results. This
-conservative fallback can include guidance when its meaning is uncertain.
-Simple beat/miss comparisons use compact EPS and sales descriptions; complex
-results retain headline text so periods and accounting bases are not lost.
+not route those items to general news. Earnings alerts require exactly one EPS
+result and one Sales result, displayed on two lines in that order. Results can
+include comparisons or bare actuals without estimates. Incomplete results,
+segment sales, extra metrics, and unexplained financial text are skipped.
+Recognized guidance-only headlines are skipped, and mixed headlines are sent
+only when guidance can be safely separated from a complete pair of actuals.
 Headline recognition is not a guarantee that every earnings report is covered.
 Analyst alerts cover ratings and price targets, except announced or maintained
 price targets are suppressed. General news includes a headline and may include

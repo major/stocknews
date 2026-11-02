@@ -60,7 +60,7 @@ def earnings_payload(
 ) -> WebhookPayload | None:
     """Build an earnings payload, or return None when no earnings data exists."""
     analysis = analyze_earnings(headline)
-    if analysis.kind in {"guidance_only", "other"}:
+    if analysis.kind != "structured":
         return None
     description = describe_earnings(headline)
     if not description:
