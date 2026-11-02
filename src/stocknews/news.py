@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 NewsClassification = Literal[
     "earnings",
     "guidance_only",
+    "incomplete_earnings",
     "analyst",
     "news",
     "non_us_exchange",
@@ -32,9 +33,9 @@ def classify_news(item: NewsItem) -> NewsClassification:
         return "unapproved_author"
 
     earnings = analyze_earnings(headline)
-    if earnings.kind == "guidance_only":
-        return "guidance_only"
-    if earnings.kind in {"structured", "headline"}:
+    if earnings.kind in {"guidance_only", "incomplete"}:
+        return "guidance_only" if earnings.kind == "guidance_only" else "incomplete_earnings"
+    if earnings.kind == "structured":
         return "earnings"
     parsed = parse_analyst(headline)
     if parsed.action and parsed.stock:

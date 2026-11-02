@@ -19,17 +19,29 @@ TRANSPARENT_PNG = "https://example.test/transparent.png"
         "Apple Q4 Sales $6.229B iPad Vs $6.952B Prior",
         "Apple Q4 Sales $8.3B Wearables, Home And Accessories Vs $9.013B Prior",
         "Apple Q4 EPS $2.10 Beats $1.98 Estimate",
+        "Apple Q4 EPS $2.10 Beats $1.98 Estimate, Sales $10B iPhone Vs $9B Prior",
+        "Apple Q4 EPS $2.10, Sales $10B, Revenue $11B",
     ],
 )
-def test_incomplete_earnings_currently_create_alerts(headline: str) -> None:
-    """Characterize the overly broad delivery gate before tightening it."""
+def test_incomplete_earnings_do_not_create_alerts(headline: str) -> None:
+    """Skip incomplete and ambiguous earnings instead of sending alerts."""
     item = NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline=headline)
 
     classification = classify_news(item)
     payload = earnings_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
-    assert classification == "earnings"
+    assert classification == "incomplete_earnings"
+    assert payload is None
+
+
+def test_reversed_mixed_results_keep_eps_first() -> None:
+    """Render EPS first regardless of source order or outcome."""
+    headline = "Apple Q4 Sales $10B Beats $9B Estimate, EPS $1 Misses $2 Estimate"
+
+    payload = earnings_payload("AAPL", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
     assert payload is not None
+    assert payload["embeds"][0]["description"] == ("💔 EPS: $1 vs. $2 est.\n💚 Sales: $10B vs. $9B est.")
 
 
 def test_complete_earnings_keep_the_requested_two_line_format() -> None:
@@ -42,3 +54,23 @@ def test_complete_earnings_keep_the_requested_two_line_format() -> None:
     assert payload["embeds"][0]["description"] == (
         "💚 EPS: $2.10 vs. $1.98 est.\n💚 Sales: $114.477B vs. $113.392B est."
     )
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "Acme Q1 EPS $, Sales $5B",
+        "Acme Q1 EPS $1..2, Sales $5B",
+        "Acme Q1 EPS $2 Beats $ Estimate, Sales $5B",
+        "Acme Q1 EPS $(0.10, Sales $5B",
+        "Analyst Estimates Q1 EPS $2, Sales $5B",
+        "Acme Affirms Q1 EPS $2, Sales $5B",
+        "Acme Forecasts Q1 EPS $2, Sales $5B",
+        "Acme Q1 EPS -$-2, Sales $5B",
+    ],
+)
+def test_pair_format_cannot_bypass_amount_and_forecast_safety(headline: str) -> None:
+    """Reject malformed amounts and analyst forecasts even with both metric labels."""
+    payload = earnings_payload("ACME", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert payload is None

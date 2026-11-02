@@ -20,7 +20,7 @@ TITLE_LIMIT = 256
 DESCRIPTION_LIMIT = 4096
 
 
-def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
+def test_earnings_payload_omits_empty_optional_fields_and_orders_lines() -> None:
     """Format earnings embeds and send them as JSON to the webhook."""
     payload = earnings_payload(
         "AAPL",
@@ -33,7 +33,7 @@ def test_earnings_payload_omits_empty_optional_fields_and_sorts_lines() -> None:
         "embeds": [
             {
                 "title": "AAPL: Apple",
-                "description": "💔 Sales: $100B vs. $105B est.\n💚 EPS: $2.00 vs. $1.80 est.",
+                "description": "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est.",
                 "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
             }
@@ -73,7 +73,7 @@ def test_earnings_payload_prefers_nonblank_company_name_override(
     """Use a stripped company override while preserving the earnings embed."""
     payload = earnings_payload(
         "AAPL",
-        "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+        "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
         STOCK_LOGO,
         TRANSPARENT_PNG,
         company_name,
@@ -83,7 +83,7 @@ def test_earnings_payload_prefers_nonblank_company_name_override(
         "embeds": [
             {
                 "title": expected_title,
-                "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                "description": "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est.",
                 "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": "https://static.stocktitan.net/company-logo/aapl.webp"},
             }
@@ -112,7 +112,7 @@ def test_earnings_payload_uses_company_name_without_symbol() -> None:
     """Build an earnings embed without a ticker prefix when no symbol is retained."""
     payload = earnings_payload(
         "",
-        "Apple Q1 EPS $2.00 beat $1.80 Estimate",
+        "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
         STOCK_LOGO,
         TRANSPARENT_PNG,
     )
@@ -121,7 +121,7 @@ def test_earnings_payload_uses_company_name_without_symbol() -> None:
         "embeds": [
             {
                 "title": "Apple",
-                "description": "💚 EPS: $2.00 vs. $1.80 est.",
+                "description": "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est.",
                 "image": {"url": TRANSPARENT_PNG},
                 "thumbnail": {"url": TRANSPARENT_PNG},
             }
@@ -132,7 +132,7 @@ def test_earnings_payload_uses_company_name_without_symbol() -> None:
 
 def test_earnings_payload_uses_headline_when_company_name_is_missing() -> None:
     """Keep a tickerless earnings title nonempty when no company marker is present."""
-    headline = "EPS $2.00 beat $1.80 Estimate"
+    headline = "EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate"
 
     payload = earnings_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
@@ -160,50 +160,54 @@ def test_earnings_payload_suppresses_forecasts(headline: str, company_name: str 
 @pytest.mark.parametrize(
     ("headline", "description"),
     [
-        # Captured stocknews logs, October 26-28, 2026.
         (
             "TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate",
             "💚 EPS: $3.14 vs. $3.07 est.\n💚 Sales: $5.312B vs. $5.282B est.",
         ),
-        (
-            "Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B",
-            "📊 EPS: $(0.01)\n📊 Sales: $43.285B",
-        ),
-        (
-            "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
-            "💚 EPS: $(0.35) vs. $(0.37) est.",
-        ),
-        (
-            "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
-            "📊 Sales: $480.3M\nUp 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
-        ),
+        ("Stellantis Q3 Adj. EPS $(0.01), Sales $43.285B", "📊 EPS: $(0.01)\n📊 Sales: $43.285B"),
         (
             "Scienjoy Holding Q2 Adj. EPS $0.05 Down From $0.08 YoY, Sales $45.698M Down From $48.700M YoY",
             "📉 EPS: $0.05 vs. $0.08 YoY\n📉 Sales: $45.698M vs. $48.700M YoY",
         ),
-        # Synthetic examples cover additional representations.
-        ("Example Q1 EPS $2.00 vs $1.80 Estimate", "⚖️ EPS: $2.00 vs. $1.80 est."),
-        ("Example Q1 EPS -$0.20 miss -$0.10 Estimate", "💔 EPS: -$0.20 vs. -$0.10 est."),
-        ("Example Q1 EPS ~$2.00 beat $1.80 Estimate", "💚 EPS: ~$2.00 vs. $1.80 est."),
-        ("Example Q1 Sales $1B vs $900M Last Year", "📊 Sales: $1B\nvs $900M Last Year"),
-        ("Example Q1 Revenue $1B beat $900M Estimate", "💚 Revenue: $1B vs. $900M est."),
-        ("Example Q1 EPS $2.00", "📊 EPS: $2.00"),
     ],
 )
 def test_earnings_payload_formats_complex_actual_headlines(headline: str, description: str) -> None:
-    """Format actual results as marker lines and keep the leftover context."""
+    """Format complete actual results as exactly two metric lines."""
     payload = earnings_payload("TEL", headline, STOCK_LOGO, TRANSPARENT_PNG)
 
     assert payload is not None
     assert payload["embeds"][0]["description"] == description
 
 
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "Acumen Pharmaceuticals Q3 EPS $(0.35) Beats $(0.37) Estimate",
+        "Baldwin Reports Preliminary Q3 Sales Of $480.3M, Up 31% YoY, Adjusted EBITDA Of $106.9M, Up 47% YoY",
+        "Example Q1 Sales $1B vs $900M Last Year",
+        "Example Q1 Revenue $1B beat $900M Estimate",
+        "Example Q1 EPS $2.00",
+        "Example Q1 EPS $2.00; Sees Q2 EPS $3.00; unusual commentary about Q2 demand",
+        "Q1 EPS $2.00 " + " ".join(["additional context"] * 300),
+    ],
+)
+def test_earnings_payload_suppresses_incomplete_or_ambiguous_actuals(headline: str) -> None:
+    """Do not fall back to incomplete or unreviewed headline text."""
+    assert earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG) is None
+
+
 @pytest.mark.parametrize("company_name", [None, "  Example Inc.  "])
 @pytest.mark.parametrize(
     "headline",
     [
-        "Example Q1 EPS $2.00 beat $1.80 Estimate; Sees Q2 EPS $3.00 vs $2.50 Estimate",
-        "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate",
+        (
+            "Example Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate; "
+            "Sees Q2 EPS $3.00 vs $2.50 Estimate"
+        ),
+        (
+            "Sees Q2 EPS $3.00 vs $2.50 Estimate; "
+            "Example Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate"
+        ),
     ],
 )
 def test_earnings_payload_strips_mixed_forecasts_from_title_and_description(
@@ -215,28 +219,18 @@ def test_earnings_payload_strips_mixed_forecasts_from_title_and_description(
 
     assert payload is not None
     embed = payload["embeds"][0]
-    assert embed["description"] == "💚 EPS: $2.00 vs. $1.80 est."
+    assert embed["description"] == "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est."
     assert embed["title"] == ("EX: Example Inc." if company_name else "EX: Example")
     assert "Sees" not in embed["title"]
     assert "Sees" not in embed["description"]
     assert "$3.00" not in embed["description"]
 
 
-def test_earnings_payload_keeps_unknown_mixed_headline() -> None:
-    """Preserve a mixed headline when its clauses cannot be safely separated."""
-    headline = "Example Q1 EPS $2.00; Sees Q2 EPS $3.00; unusual commentary about Q2 demand"
-
-    payload = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
-
-    assert payload is not None
-    assert payload["embeds"][0]["description"] == (
-        "📊 EPS: $2.00\nSees Q2 EPS $3.00\nunusual commentary about Q2 demand"
-    )
-
-
 def test_earnings_payload_rebuild_changes_only_company_title() -> None:
     """Keep safe description and media stable across company-name rebuilding."""
-    headline = "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate"
+    headline = (
+        "Sees Q2 EPS $3.00 vs $2.50 Estimate; Example Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate"
+    )
 
     original = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG)
     rebuilt = earnings_payload("EX", headline, STOCK_LOGO, TRANSPARENT_PNG, "  Example Inc.  ")
@@ -246,21 +240,7 @@ def test_earnings_payload_rebuild_changes_only_company_title() -> None:
     assert rebuilt is not None
     assert rebuilt == rebuilt_again
     assert {**original["embeds"][0], "title": "EX: Example Inc."} == rebuilt["embeds"][0]
-    assert rebuilt["embeds"][0]["description"] == "💚 EPS: $2.00 vs. $1.80 est."
-
-
-def test_earnings_payload_limits_long_headline_fallback() -> None:
-    """Truncate fallback titles and descriptions at Discord's embed limits."""
-    headline = "Q1 EPS $2.00 " + " ".join(["additional context"] * 300)
-    description = "📊 EPS: $2.00\n" + " ".join(["additional context"] * 300)
-
-    payload = earnings_payload("", headline, STOCK_LOGO, TRANSPARENT_PNG)
-
-    assert payload is not None
-    embed = payload["embeds"][0]
-    assert embed["title"] == f"{headline[: TITLE_LIMIT - 1]}…"
-    assert embed["description"] == f"{description[: DESCRIPTION_LIMIT - 1]}…"
-    assert len(embed["description"]) == DESCRIPTION_LIMIT
+    assert rebuilt["embeds"][0]["description"] == "💚 EPS: $2.00 vs. $1.80 est.\n💔 Sales: $100B vs. $105B est."
 
 
 @pytest.mark.parametrize(

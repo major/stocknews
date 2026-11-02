@@ -72,7 +72,7 @@ def test_blocked_phrases_do_not_suppress_news(headline: str) -> None:
 
 def test_news_unescapes_encoded_headline_characters_before_classifying() -> None:
     """Decode HTML entities before classifying headline categories."""
-    earnings_item = _item(("AAPL",), "Benzinga Newsdesk", "AAPL Q1 EPS &#36;2.00 vs &#36;1.80 est.")
+    earnings_item = _item(("AAPL",), "Benzinga Newsdesk", "AAPL Q1 EPS &#36;2.00 vs &#36;1.80 est., Sales &#36;5B")
     analyst_item = _item(
         ("AAPL",), "Benzinga Newsdesk", "Baird Upgrades Apple to Outperform, Raises Price Target to $200"
     )
@@ -96,20 +96,21 @@ def test_author_match_is_exact_and_case_sensitive(author: str) -> None:
         ("TE Connectivity Q4 Adj. EPS $3.14 Beats $3.07 Estimate, Sales $5.312B Beat $5.282B Estimate", "earnings"),
         # Constructed case, HTML, and mixed-headline variants.
         ("TE Connectivity sees q1 eps &#36;1.20 vs &#36;1.10 estimate", "guidance_only"),
-        ("TE Connectivity Q4 EPS &#36;2.10 beat &#36;2.00 Estimate", "earnings"),
+        ("TE Connectivity Q4 EPS &#36;2.10 beat &#36;2.00 Estimate", "incomplete_earnings"),
         (
             "TE Connectivity Q4 EPS $2.10 beat $2.00 Estimate; Sees Q1 EPS $1.20 vs $1.10 Estimate",
-            "earnings",
+            "incomplete_earnings",
         ),
         (
             "TE Connectivity Sees Q1 EPS $1.20 vs $1.10 Estimate; Q4 EPS $2.10 beat $2.00 Estimate",
-            "earnings",
+            "incomplete_earnings",
         ),
-        ("TE Connectivity Sees Q1 EPS $1.20; Q4 EPS $2.10 on a comparable basis", "earnings"),
+        ("TE Connectivity Sees Q1 EPS $1.20; Q4 EPS $2.10 on a comparable basis", "incomplete_earnings"),
+        ("TE Connectivity Q4 EPS $2, Sales $5; Unknown update", "incomplete_earnings"),
     ],
 )
 def test_earnings_guidance_and_actual_classification(headline: str, expected: str) -> None:
-    """Skip guidance alone while keeping actual and uncertain mixed results deliverable."""
+    """Route complete pairs and suppress incomplete or uncertain financial results."""
     assert classify_news(_item(("TEL",), "Benzinga Newsdesk", headline)) == expected
 
 
