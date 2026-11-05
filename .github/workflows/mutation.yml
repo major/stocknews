@@ -53,6 +53,10 @@ jobs:
           uv run --locked mutmut export-cicd-stats 2>&1 | tee mutmut-export.log
         shell: bash
 
+      - name: Export survivor diffs
+        if: ${{ always() && !cancelled() }}
+        run: uv run --locked python .github/scripts/mutation_report.py
+
       - name: Add mutation summary
         if: ${{ always() && !cancelled() }}
         run: |
@@ -97,6 +101,7 @@ jobs:
             mutmut-run.log
             mutmut-results.txt
             mutmut-export.log
+            mutmut-survivor-diffs.txt
             mutants/mutmut-cicd-stats.json
           if-no-files-found: ignore
           retention-days: 14
