@@ -152,6 +152,8 @@ show_contexts = true
 [tool.mutmut]
 source_paths = ["src/stocknews"]
 only_mutate = ["src/stocknews/earnings.py", "src/stocknews/analyst.py"]
+# Report tests also run inside mutmut's isolated project copy.
+also_copy = [".github/scripts"]
 
 [tool.uv]
 default-groups = ["dev"]

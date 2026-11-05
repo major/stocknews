@@ -21,6 +21,10 @@ TRANSPARENT_PNG = "https://example.test/transparent.png"
         "Apple Q4 EPS $2.10 Beats $1.98 Estimate",
         "Apple Q4 EPS $2.10 Beats $1.98 Estimate, Sales $10B iPhone Vs $9B Prior",
         "Apple Q4 EPS $2.10, Sales $10B, Revenue $11B",
+        "Acme Q1 EPS $2, EPS $3",
+        "Acme Sees EPS $3; Q1 EPS $2, Sales $5B",
+        "Acme Q1 EPS $2, Sales $5B; Sees Q2 EPS $3; Conference Call Friday",
+        "Acme To Announce Q2 EPS Expected To Be $2; Conference Call Friday",
     ],
 )
 def test_incomplete_earnings_do_not_create_alerts(headline: str) -> None:
@@ -54,6 +58,29 @@ def test_complete_earnings_keep_the_requested_two_line_format() -> None:
     assert payload["embeds"][0]["description"] == (
         "💚 EPS: $2.10 vs. $1.98 est.\n💚 Sales: $114.477B vs. $113.392B est."
     )
+
+
+@pytest.mark.parametrize(
+    ("headline", "description"),
+    [
+        ("Acme q1 adj. eps $2, adj. sales $5B", "📊 EPS: $2\n📊 Sales: $5B"),
+        ("UPDATE: EPS $2, Sales $5B", "📊 EPS: $2\n📊 Sales: $5B"),
+        (
+            "Acme Q1 EPS $2 vs $1 Est, Sales $5B vs $4B Est",
+            "⚖️ EPS: $2 vs. $1 est.\n⚖️ Sales: $5B vs. $4B est.",
+        ),
+    ],
+)
+def test_complete_pair_variants_preserve_alert_content(headline: str, description: str) -> None:
+    """Keep case, editorial, and comparison variants deliverable without losing content."""
+    item = NewsItem(symbols=("ACME",), author="Benzinga Newsdesk", headline=headline)
+
+    classification = classify_news(item)
+    payload = earnings_payload("ACME", headline, STOCK_LOGO, TRANSPARENT_PNG)
+
+    assert classification == "earnings"
+    assert payload is not None
+    assert payload["embeds"][0]["description"] == description
 
 
 @pytest.mark.parametrize(

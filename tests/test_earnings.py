@@ -25,20 +25,22 @@ def test_earnings_extraction_is_separate_from_classification() -> None:
 
 
 @pytest.mark.parametrize(
-    ("headline", "actual", "estimate", "outcome"),
+    ("headline", "metric", "actual", "estimate", "outcome"),
     [
-        ("Acme Q1 Sales $1.2T beat $1.1T Estimate", "$1.2T", "$1.1T", "beat"),
-        ("Acme Q1 Sales $900B missed $1T Estimate", "$900B", "$1T", "miss"),
+        ("Acme Q1 Sales $1.2T beat $1.1T Estimate", "Sales", "$1.2T", "$1.1T", "beat"),
+        ("Acme Q1 Sales $900B missed $1T Estimate", "Sales", "$900B", "$1T", "miss"),
+        ("Acme Q1 Normalized\tFFO $2 vs $1 Est", "Normalized FFO", "$2", "$1", "vs"),
     ],
 )
-def test_earnings_extraction_preserves_trillion_and_mixed_units(
+def test_earnings_extraction_preserves_metric_names_and_units(
     headline: str,
+    metric: str,
     actual: str,
     estimate: str,
     outcome: str,
 ) -> None:
-    """Preserve trillion and mixed-unit amounts when extracting sales results."""
-    result = extract_earnings(headline)["Sales"]
+    """Preserve canonical metric names and raw amounts during extraction."""
+    result = extract_earnings(headline)[metric]
 
     assert (result.actual, result.estimate, result.outcome) == (actual, estimate, outcome)
 
@@ -174,6 +176,7 @@ def test_reviewed_guidance_is_not_earnings(headline: str) -> None:
     "headline",
     [
         "Analyst Raises Acme Q1 EPS Estimate From $1.00 To $2.00",
+        "Analyst Estimates Acme Q1 EPS $2",
         "Acme To Report Q1 Earnings Tomorrow",
         "Acme Q1 Vehicle Sales $2M",
         "Acme Announces New Product",
