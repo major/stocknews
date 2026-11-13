@@ -1,5 +1,8 @@
 """Tests for news classification and rejection precedence."""
 
+import hashlib
+from importlib.resources import files
+
 import pytest
 
 from stocknews.models import NewsItem
@@ -128,3 +131,45 @@ def test_guidance_keeps_symbol_and_author_rejection_precedence(
     """Apply the existing eligibility gates before earnings analysis."""
     headline = "TE Connectivity Sees Q1 GAAP EPS $3.04 vs $2.81 Est"
     assert classify_news(_item(symbols, author, headline)) == expected
+
+
+@pytest.mark.parametrize(
+    ("symbols", "expected"),
+    [
+        (("AAPL",), "earnings"),
+        ((" aapl ",), "earnings"),
+        (("BRK.B",), "earnings"),
+        (("ACME",), "unlisted_earnings_symbol"),
+        (("ACME", "AAPL"), "unlisted_earnings_symbol"),
+        (("AAPL", "ACME"), "earnings"),
+        ((), "unlisted_earnings_symbol"),
+        (("", "  "), "unlisted_earnings_symbol"),
+        (("NASDAQ:AAPL",), "non_us_exchange"),
+        (("TSX:SHOP", " AAPL "), "earnings"),
+    ],
+)
+def test_structured_earnings_require_a_listed_primary_symbol(symbols: tuple[str, ...], expected: str) -> None:
+    """Allow only listed primary normalized symbols for structured earnings."""
+    headline = "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate"
+
+    assert classify_news(_item(symbols, "Benzinga Newsdesk", headline)) == expected
+
+
+@pytest.mark.parametrize(
+    ("author", "headline", "expected"),
+    [
+        ("Someone else", "Acme Q1 EPS $2, Sales $5B", "unapproved_author"),
+        ("Benzinga Newsdesk", "Acme Sees Q1 EPS $2 vs $1 Est", "guidance_only"),
+        ("Benzinga Newsdesk", "Acme Q1 EPS $2 vs $1 Est", "incomplete_earnings"),
+    ],
+)
+def test_unlisted_earnings_preserve_earlier_rejection_reasons(author: str, headline: str, expected: str) -> None:
+    """Keep author and earnings analysis rejections ahead of the symbol screen."""
+    assert classify_news(_item(("ACME",), author, headline)) == expected
+
+
+def test_earnings_symbols_snapshot_matches_issue_attachment() -> None:
+    """Pin the bundled snapshot derived from the CSV attached to issue 620."""
+    resource = files("stocknews").joinpath("earnings_symbols.txt").read_bytes()
+
+    assert hashlib.sha256(resource).hexdigest() == "1640bddac1148ac4227bc3364e0231bf1e5be9d1a284772ad22c4bb32b5b0224"

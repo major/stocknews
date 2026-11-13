@@ -62,27 +62,57 @@ Analyst alerts cover ratings and price targets, except announced or maintained
 price targets are suppressed. General news includes a headline and may include
 a summary and link. All categories filter for
 Benzinga Newsdesk items. Symbols are trimmed, and blank or colon-qualified
-symbols are removed. Items with no symbols are allowed; items with only
-colon-qualified symbols are skipped. Mixed lists keep their US-style tickers.
-This colon-based check does not verify exchange listings. Embeds use the first
-retained ticker, or no ticker prefix and a transparent thumbnail for tickerless
-news. General-news headlines are not blocked by phrase. Webhooks are still
-required to send alerts, and empty webhook lists send nothing. Setting changes
-take effect after restarting the service.
+symbols are removed. Items with only colon-qualified symbols are skipped.
+Mixed lists keep their US-style tickers. This colon-based check does not verify
+exchange listings.
+
+Structured earnings require the first retained ticker to appear in the bundled
+earnings symbol list, with case-insensitive membership checks. Missing or
+unlisted primary tickers are skipped; secondary tickers cannot qualify an item
+or produce additional alerts. Each earnings alert uses only the first retained
+ticker. General news and analyst routing do not use this list and still allow
+items without tickers. Tickerless general news has no ticker prefix and uses a
+transparent thumbnail. A headline such as "Acme reports quarterly results" can
+still route to general news when it does not match earnings recognition.
+General-news headlines are not blocked by phrase. Webhooks are still required
+to send alerts, and empty webhook lists send nothing. Setting changes take
+effect after restarting the service.
 
 Analyst alerts use a compact title with the stock ticker and Alpaca security
 name when available. The description contains the price target, rating, and
 firm, and the sender name is `Analyst Wire`. Earnings and analyst items that
 pass the delivery filters trigger an asset-name lookup. Earnings titles fall
-back to the company name parsed from the headline. Tickerless earnings use the
-full headline if no name is present. Names share a 1024-entry in-memory LRU cache: successful
-lookups last 24 hours, missing names last 1 hour, and temporary errors last 1
-minute. A failed refresh retains a previously cached name; without a cached
-name, analyst titles use the ticker only. Each lookup has a 2-second deadline,
-and the cache resets when the service restarts.
+back to the company name parsed from the headline. Names share a 1024-entry
+in-memory LRU cache: successful lookups last 24 hours, missing names last 1 hour,
+and temporary errors last 1 minute. A failed refresh retains a previously cached
+name; without a cached name, analyst titles use the ticker only. Each lookup has
+a 2-second deadline, and the cache resets when the service restarts.
 
 `ALPACA_STOCK_STREAM_URL` is no longer used and is ignored. SPY and QQQ remain
 valid news tickers, and stock logo behavior is unchanged.
+
+### Earnings symbol snapshot
+
+The bundled `src/stocknews/earnings_symbols.txt` contains 3,067 symbols from
+the November 13, 2026 [issue 620 CSV attachment](https://github.com/user-attachments/files/34803502/stocks-screener-11-13-2026.csv).
+The source CSV SHA256 is
+`3b1118152c5cd82465fe7ee6ebf9a666033b913fe7dfb40d9851f775a78a5fc3`;
+the bundled resource SHA256 is
+`1640bddac1148ac4227bc3364e0231bf1e5be9d1a284772ad22c4bb32b5b0224`.
+
+To update the snapshot:
+
+1. Use a CSV parser to read the `Symbol` column from the actual two-field stock
+   rows. Explicitly omit the final one-field `Downloaded from Barchart.com...`
+   footer.
+2. Trim and uppercase symbols, reject blank or duplicate entries, and write
+   sorted unique symbols with LF line endings and a final newline. Compare the
+   exact output set and all stock rows against the source, not just the count.
+3. Update the expected snapshot hash in the test and the provenance and hashes
+   here. Run the project gates and check the built wheel contains the resource.
+4. Rebuild, redeploy, and restart the service. The runtime does not download or
+   hot reload the list. Filtered article IDs already marked seen do not replay
+   when the list grows.
 
 ## REST news polling
 
