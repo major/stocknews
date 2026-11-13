@@ -118,6 +118,7 @@ def _runtime_transport(webhook_handler: Any) -> httpx2.MockTransport:
     """Route asset lookups to canned names and delegate webhook requests."""
     asset_names = {
         "AAPL": "Apple",
+        "ACME": "Acme",
         "AA": "Alcoa",
         "EFX": "Equifax",
         "OHI": "Omega Healthcare",
@@ -839,6 +840,13 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
             "AAPL",
         ),
         (
+            (" AAPL ", "MSFT"),
+            "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
+            "/earnings",
+            "AAPL: Apple",
+            "AAPL",
+        ),
+        (
             (),
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "/analyst",
@@ -852,8 +860,16 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
             "AAPL · Apple",
             "AAPL",
         ),
+        (
+            ("ACME",),
+            "Goldman Sachs Maintains Buy on Acme, Raises Price Target to $223",
+            "/analyst",
+            "ACME · Acme",
+            "ACME",
+        ),
         ((), "Apple announces a phone", "/news", "Apple announces a phone", ""),
         ((" ", "\t"), "Apple shares a blank ticker update", "/news", "Apple shares a blank ticker update", ""),
+        (("ACME",), "Acme launches a phone", "/news", "ACME: Acme launches a phone", "ACME"),
         ((" AAPL ", "MSFT"), "Apple launches a phone", "/news", "AAPL: Apple launches a phone", "AAPL"),
         (
             ("NASDAQ:NVDA", " MSFT "),
@@ -881,10 +897,13 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
     ids=[
         "earnings-no-symbols",
         "earnings-mixed-symbols",
+        "earnings-one-primary-symbol",
         "analyst-no-symbols",
         "analyst-mixed-symbols",
+        "analyst-unlisted-symbol",
         "news-no-symbols",
         "news-blank-symbols",
+        "news-unlisted-symbol",
         "news-us-multiple",
         "news-foreign-first",
         "news-us-first",
@@ -934,6 +953,7 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
         assert len(requested) == 1
         requested_route, payload = requested[0]
         assert requested_route == route
+        assert len(payload["embeds"]) == 1
         embed = payload["embeds"][0]
         if route == "/analyst":
             assert payload["username"] == "Analyst Wire"
