@@ -73,7 +73,7 @@ def test_complete_earnings_keep_the_requested_two_line_format() -> None:
 )
 def test_complete_pair_variants_preserve_alert_content(headline: str, description: str) -> None:
     """Keep case, editorial, and comparison variants deliverable without losing content."""
-    item = NewsItem(symbols=("ACME",), author="Benzinga Newsdesk", headline=headline)
+    item = NewsItem(symbols=("AAPL",), author="Benzinga Newsdesk", headline=headline)
 
     classification = classify_news(item)
     payload = earnings_payload("ACME", headline, STOCK_LOGO, TRANSPARENT_PNG)

@@ -539,7 +539,7 @@ def test_earnings_asset_lookup_failure_preserves_headline_name_and_delivery(fail
         ("no-webhooks", 0),
         ("earnings-filtered", 0),
         ("earnings-disabled", 0),
-        ("earnings-no-symbol", 1),
+        ("earnings-no-symbol", 0),
         ("earnings-no-webhooks", 0),
         ("earnings-unparseable", 1),
     ],
@@ -830,7 +830,7 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
 @pytest.mark.parametrize(
     ("symbols", "headline", "route", "title", "ticker"),
     [
-        ((), "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate", "/earnings", "Apple", ""),
+        ((), "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate", None, None, None),
         (
             ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
             "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
@@ -926,9 +926,10 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
         if route is None:
             assert requested == []
             skips = [json.loads(line) for line in output.getvalue().splitlines()]
-            assert [record["reason"] for record in skips if record["msg"] == "skipping news item"] == [
-                "non_us_exchange"
-            ]
+            expected_reason = (
+                "non_us_exchange" if any(symbol.strip() for symbol in symbols) else "unlisted_earnings_symbol"
+            )
+            assert [record["reason"] for record in skips if record["msg"] == "skipping news item"] == [expected_reason]
             return
 
         assert len(requested) == 1

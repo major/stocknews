@@ -115,6 +115,23 @@ def test_earnings_guidance_and_actual_classification(headline: str, expected: st
 
 
 @pytest.mark.parametrize(
+    ("symbols", "expected"),
+    [
+        (("AAPL",), "earnings"),
+        (("aapl",), "earnings"),
+        (("ACME",), "unlisted_earnings_symbol"),
+        (("ACME", "AAPL"), "unlisted_earnings_symbol"),
+        ((), "unlisted_earnings_symbol"),
+    ],
+)
+def test_earnings_require_a_listed_primary_symbol(symbols: tuple[str, ...], expected: str) -> None:
+    """Deliver earnings only when the primary routed ticker appears in the screener."""
+    headline = "Acme Q1 EPS $2, Sales $5"
+
+    assert classify_news(_item(symbols, "Benzinga Newsdesk", headline)) == expected
+
+
+@pytest.mark.parametrize(
     ("symbols", "author", "expected"),
     [
         (("TEL",), "Someone else", "unapproved_author"),
