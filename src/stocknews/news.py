@@ -1,10 +1,15 @@
 """Filter and classify incoming news messages."""
 
 from html import unescape
+from importlib.resources import files
 from typing import TYPE_CHECKING, Literal
 
 from stocknews.analyst import parse_analyst
 from stocknews.earnings import analyze_earnings
+
+_EARNINGS_SYMBOLS = frozenset(
+    files("stocknews").joinpath("earnings_symbols.txt").read_text(encoding="utf-8").splitlines()
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -13,6 +18,7 @@ if TYPE_CHECKING:
 
 NewsClassification = Literal[
     "earnings",
+    "unlisted_earnings_symbol",
     "guidance_only",
     "incomplete_earnings",
     "analyst",
@@ -36,7 +42,11 @@ def classify_news(item: NewsItem) -> NewsClassification:
     if earnings.kind in {"guidance_only", "incomplete"}:
         return "guidance_only" if earnings.kind == "guidance_only" else "incomplete_earnings"
     if earnings.kind == "structured":
-        return "earnings"
+        return (
+            "earnings"
+            if normalized_symbols and normalized_symbols[0].upper() in _EARNINGS_SYMBOLS
+            else "unlisted_earnings_symbol"
+        )
     parsed = parse_analyst(headline)
     if parsed.action and parsed.stock:
         return "analyst"

@@ -47,6 +47,9 @@ Read only what you need:
 - Keep Python dependencies and the lockfile managed by uv. Use `uv sync --locked`.
 - Keep both combined statement-and-branch coverage and branch-only coverage at 95% or higher.
 - Preserve Benzinga Newsdesk filtering, earnings/analyst/general routing, and bounded worker behavior.
+- Structured earnings require the first normalized ticker in the bundled
+  `src/stocknews/earnings_symbols.txt` snapshot; missing tickers are suppressed.
+  Keep the resource, test checksum, and README provenance synchronized.
 - REST polling is the sole Alpaca news ingestion path. It polls immediately,
   reads every page, then waits after each attempt. Its SQLite state suppresses
   repeated article IDs across polls and restarts; state must persist and remain

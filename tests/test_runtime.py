@@ -530,22 +530,26 @@ def test_earnings_asset_lookup_failure_preserves_headline_name_and_delivery(fail
 
 
 @pytest.mark.parametrize(
-    ("case", "expected_posts"),
+    ("case", "expected_posts", "expected_reasons"),
     [
-        ("suppressed", 0),
-        ("filtered", 0),
-        ("disabled", 0),
-        ("other-category", 1),
-        ("no-symbol", 1),
-        ("no-webhooks", 0),
-        ("earnings-filtered", 0),
-        ("earnings-disabled", 0),
-        ("earnings-no-symbol", 1),
-        ("earnings-no-webhooks", 0),
-        ("earnings-unparseable", 1),
+        ("suppressed", 0, ("no_payload",)),
+        ("filtered", 0, ("unapproved_author",)),
+        ("disabled", 0, ("category_disabled",)),
+        ("other-category", 1, ()),
+        ("no-symbol", 1, ()),
+        ("no-webhooks", 0, ()),
+        ("earnings-filtered", 0, ("unapproved_author",)),
+        ("earnings-disabled", 0, ("category_disabled",)),
+        ("earnings-no-symbol", 0, ("unlisted_earnings_symbol",)),
+        ("earnings-unlisted", 0, ("unlisted_earnings_symbol",)),
+        ("earnings-unlisted-primary", 0, ("unlisted_earnings_symbol",)),
+        ("earnings-no-webhooks", 0, ()),
+        ("earnings-unparseable", 1, ()),
     ],
 )
-def test_runtime_skips_asset_lookup_when_delivery_is_not_eligible(case: str, expected_posts: int) -> None:
+def test_runtime_skips_asset_lookup_when_delivery_is_not_eligible(
+    case: str, expected_posts: int, expected_reasons: tuple[str, ...]
+) -> None:
     """Verify only eligible analyst and earnings deliveries request an asset name."""
 
     async def scenario() -> None:
@@ -575,6 +579,8 @@ def test_runtime_skips_asset_lookup_when_delivery_is_not_eligible(case: str, exp
             "earnings-filtered": replace(earnings, author="Someone Else"),
             "earnings-disabled": earnings,
             "earnings-no-symbol": replace(earnings, symbols=()),
+            "earnings-unlisted": replace(earnings, symbols=("ACME",)),
+            "earnings-unlisted-primary": replace(earnings, symbols=("ACME", "AAPL")),
             "earnings-no-webhooks": earnings,
             "earnings-unparseable": replace(earnings, headline="Apple reports quarterly results"),
         }
@@ -604,11 +610,16 @@ def test_runtime_skips_asset_lookup_when_delivery_is_not_eligible(case: str, exp
 
             return events()
 
+        output = StringIO()
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), timeout=10) as client:
-            await run(config, client, _logger(StringIO()), connect_news)
+            await run(config, client, _logger(output), connect_news)
 
         assert not [request for request in requested if request[0] == "GET"]
         assert len([request for request in requested if request[0] == "POST"]) == expected_posts
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert (
+            tuple(record["reason"] for record in records if record["msg"] == "skipping news item") == expected_reasons
+        )
 
     asyncio.run(scenario())
 
@@ -829,70 +840,76 @@ def test_received_news_item_logs_content_limited_to_250_characters(content: str)
 
 
 @pytest.mark.parametrize(
-    ("symbols", "headline", "route", "title", "ticker"),
+    ("symbols", "headline", "route", "expected_embed", "expected_reason"),
     [
-        ((), "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate", "/earnings", "Apple", ""),
+        (
+            (),
+            "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
+            None,
+            None,
+            "unlisted_earnings_symbol",
+        ),
         (
             ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
             "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
             "/earnings",
-            "AAPL: Apple",
-            "AAPL",
+            ("AAPL: Apple", "AAPL"),
+            None,
         ),
         (
             (" AAPL ", "MSFT"),
             "Apple Q1 EPS $2.00 beat $1.80 Estimate, Sales $100B miss $105B Estimate",
             "/earnings",
-            "AAPL: Apple",
-            "AAPL",
+            ("AAPL: Apple", "AAPL"),
+            None,
         ),
         (
             (),
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "/analyst",
-            "Apple",
-            "",
+            ("Apple", ""),
+            None,
         ),
         (
             ("NASDAQ:BAD", " AAPL ", "NYSE:IBM"),
             "Goldman Sachs Maintains Buy on Apple, Raises Price Target to $223",
             "/analyst",
-            "AAPL · Apple",
-            "AAPL",
+            ("AAPL · Apple", "AAPL"),
+            None,
         ),
         (
             ("ACME",),
             "Goldman Sachs Maintains Buy on Acme, Raises Price Target to $223",
             "/analyst",
-            "ACME · Acme",
-            "ACME",
+            ("ACME · Acme", "ACME"),
+            None,
         ),
-        ((), "Apple announces a phone", "/news", "Apple announces a phone", ""),
-        ((" ", "\t"), "Apple shares a blank ticker update", "/news", "Apple shares a blank ticker update", ""),
-        (("ACME",), "Acme launches a phone", "/news", "ACME: Acme launches a phone", "ACME"),
-        ((" AAPL ", "MSFT"), "Apple launches a phone", "/news", "AAPL: Apple launches a phone", "AAPL"),
+        ((), "Apple announces a phone", "/news", ("Apple announces a phone", ""), None),
+        ((" ", "\t"), "Apple shares a blank ticker update", "/news", ("Apple shares a blank ticker update", ""), None),
+        (("ACME",), "Acme launches a phone", "/news", ("ACME: Acme launches a phone", "ACME"), None),
+        ((" AAPL ", "MSFT"), "Apple launches a phone", "/news", ("AAPL: Apple launches a phone", "AAPL"), None),
         (
             ("NASDAQ:NVDA", " MSFT "),
             "Microsoft launches a tablet",
             "/news",
-            "MSFT: Microsoft launches a tablet",
-            "MSFT",
+            ("MSFT: Microsoft launches a tablet", "MSFT"),
+            None,
         ),
         (
             (" MSFT ", "NASDAQ:NVDA"),
             "Microsoft reports another update",
             "/news",
-            "MSFT: Microsoft reports another update",
-            "MSFT",
+            ("MSFT: Microsoft reports another update", "MSFT"),
+            None,
         ),
         (
             (" AAPL ",),
             "Apple says this would be worth reading",
             "/news",
-            "AAPL: Apple says this would be worth reading",
-            "AAPL",
+            ("AAPL: Apple says this would be worth reading", "AAPL"),
+            None,
         ),
-        (("NASDAQ:NVDA", "NYSE:IBM"), "Foreign listings should be skipped", None, None, None),
+        (("NASDAQ:NVDA", "NYSE:IBM"), "Foreign listings should be skipped", None, None, "non_us_exchange"),
     ],
     ids=[
         "earnings-no-symbols",
@@ -915,8 +932,8 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
     symbols: tuple[str, ...],
     headline: str,
     route: str | None,
-    title: str | None,
-    ticker: str | None,
+    expected_embed: tuple[str, str] | None,
+    expected_reason: str | None,
 ) -> None:
     """Route each item through run and verify normalized ticker output."""
 
@@ -945,11 +962,12 @@ def test_runtime_normalizes_symbols_before_building_category_payloads(
         if route is None:
             assert requested == []
             skips = [json.loads(line) for line in output.getvalue().splitlines()]
-            assert [record["reason"] for record in skips if record["msg"] == "skipping news item"] == [
-                "non_us_exchange"
-            ]
+            assert [record["reason"] for record in skips if record["msg"] == "skipping news item"] == [expected_reason]
             return
 
+        assert expected_embed is not None
+        title, ticker = expected_embed
+        assert expected_reason is None
         assert len(requested) == 1
         requested_route, payload = requested[0]
         assert requested_route == route
